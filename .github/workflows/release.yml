@@ -34,7 +34,7 @@ jobs:
       - name: install node dependencies
         run: npm ci
           
-      - name: run tauri-action
+      - name: Build and publish Tauri app
         uses: tauri-apps/tauri-action@v0
         with:
           tagName: v__VERSION__
