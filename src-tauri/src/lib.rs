@@ -25,6 +25,8 @@ pub fn run() {
                 let _ = w.set_focus();
             }
         }))
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             // Setup System Tray Menu Items
             let show_i = MenuItem::with_id(app, "show", "Show PortPurge", true, None::<&str>)?;

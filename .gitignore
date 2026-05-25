@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Tauri signer keys
+updater.key
+updater.key.pub
+
