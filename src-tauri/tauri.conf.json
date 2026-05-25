@@ -24,7 +24,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "createUpdaterArtifacts": true,
+    "createUpdaterArtifacts": false,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -32,13 +32,5 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
-  },
-  "plugins": {
-    "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY0NDdCNjNEQkFEREI5RDAKUldUUXVkMjZQYlpIOUI3YWhtL3g0aWY2ZGJJSG1RK1pZKy9qVm43ZVBYQzZ0blBOSVRNZ3NDK1UK",
-      "endpoints": [
-        "https://github.com/IT25100142/PortPurge-System/releases/latest/download/latest.json"
-      ]
-    }
   }
 }
