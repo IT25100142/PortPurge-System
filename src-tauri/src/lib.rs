@@ -30,3 +30,21 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_active_ports() {
+        tauri::async_runtime::block_on(async {
+            let ports = sys::get_active_ports().await;
+            assert!(ports.is_ok());
+            let ports = ports.unwrap();
+            println!("\nFound {} active ports:", ports.len());
+            for port in &ports[..std::cmp::min(15, ports.len())] {
+                println!("  Port: {}, Protocol: {}, PID: {}, Process: {}", port.port, port.protocol, port.pid, port.process_name);
+            }
+        });
+    }
+}

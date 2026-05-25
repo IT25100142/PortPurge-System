@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 pub struct PortInfo {
     pub port: u16,
     pub protocol: String, // "TCP" or "UDP"
-    pub pid: Option<u32>,
-    pub process_name: Option<String>,
+    pub pid: u32,
+    pub process_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
