@@ -35,7 +35,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY0NDdCNjNEQkFEREI5RDAKUldUUXVkMjZQYlpIOUI3YWhtL3g0aWY2ZGJJSG1RK1pZKy9qVm43ZVBYQzZ0blBOSVRNZ3NDK1UK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IHJzaWduIGVuY3J5cHRlZCBzZWNyZXQga2V5ClJXUlRZMEl5cTR2aHhVMnlyYXpPU21pYnZEVzhQRmFsTUlYaWdhQTZseGt1SzcvMVNhNEFBQkFBQUFBQUFBQUFBQUlBQUFBQXAxeDJPZDU1cjZzM3hDVEVSSUtUaDBoTUJxY2NuNFQzQmtwYjIzRjdUOG5GTGV3RGhXMHJORVhTVVFUS0Z5bHJGUmJ4NjJCK2k3alFDV1oxb3FKeGd4ZUZlbDN1M01ZcmtPVzE5eElpWWRLMVA5aTBKWDdNTm55NU92c3l5VyticjNNbjdTMVgwaTQ9Cg==",
       "endpoints": [
         "https://github.com/IT25100142/PortPurge-System/releases/latest/download/latest.json"
       ]
