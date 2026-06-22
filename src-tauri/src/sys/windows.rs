@@ -1,7 +1,66 @@
-use super::{PortInfo, PortPurgeError};
+use super::{host_from_addr_port, is_localhost_address, ParsedPort, PortInfo, PortPurgeError};
 use std::collections::HashMap;
-use std::process::Command;
 use std::os::windows::process::CommandExt;
+use std::process::Command;
+
+/// Parse a single `netstat -ano` output line into a localhost-bound port entry.
+pub(crate) fn parse_netstat_line(line: &str) -> Option<ParsedPort> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    if parts.is_empty() {
+        return None;
+    }
+
+    let proto = parts[0];
+    if proto != "TCP" && proto != "UDP" {
+        return None;
+    }
+
+    if parts.len() < 2 {
+        return None;
+    }
+    let local_addr = parts[1];
+
+    let host = host_from_addr_port(local_addr)?;
+    if !is_localhost_address(host) {
+        return None;
+    }
+
+    let port = match local_addr.rfind(':') {
+        Some(pos) => local_addr[pos + 1..].parse::<u16>().ok()?,
+        None => return None,
+    };
+
+    let pid = if proto == "TCP" {
+        if parts.len() < 5 {
+            return None;
+        }
+        let state = parts[3];
+        if state != "LISTENING" {
+            return None;
+        }
+        parts[4].parse::<u32>().ok()?
+    } else {
+        if parts.len() < 4 {
+            return None;
+        }
+        parts[3].parse::<u32>().ok()?
+    };
+
+    if pid == 0 {
+        return None;
+    }
+
+    Some(ParsedPort {
+        port,
+        protocol: proto.to_string(),
+        pid,
+    })
+}
 
 /// Helper to build a map of PID -> Process Name using `tasklist` on Windows.
 fn get_process_map() -> HashMap<u32, String> {
@@ -17,8 +76,7 @@ fn get_process_map() -> HashMap<u32, String> {
             if line.is_empty() {
                 continue;
             }
-            
-            // Clean outer double quotes and split by ","
+
             let content = line.trim_matches('"');
             let parts: Vec<&str> = content.split("\",\"").collect();
             if parts.len() >= 2 {
@@ -37,7 +95,7 @@ fn get_process_map() -> HashMap<u32, String> {
 pub async fn get_active_ports() -> Result<Vec<PortInfo>, PortPurgeError> {
     let process_map = get_process_map();
     let mut ports = Vec::new();
-    
+
     let mut cmd = Command::new("netstat");
     cmd.arg("-ano");
     cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
@@ -50,96 +108,39 @@ pub async fn get_active_ports() -> Result<Vec<PortInfo>, PortPurgeError> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     for line in stdout.lines() {
-        let line = line.trim();
-        if line.is_empty() {
+        let Some(parsed) = parse_netstat_line(line) else {
             continue;
-        }
-
-        // Split by whitespace
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.is_empty() {
-            continue;
-        }
-
-        let proto = parts[0];
-        if proto != "TCP" && proto != "UDP" {
-            continue;
-        }
-
-        // Parse local address
-        if parts.len() < 2 {
-            continue;
-        }
-        let local_addr = parts[1];
-
-        // Parse port from local address (e.g. 127.0.0.1:8080 or [::1]:8080)
-        let port = match local_addr.rfind(':') {
-            Some(pos) => {
-                match local_addr[pos + 1..].parse::<u16>() {
-                    Ok(p) => p,
-                    Err(_) => continue,
-                }
-            }
-            None => continue,
         };
 
-        // Parse PID and state
-        let pid = if proto == "TCP" {
-            // TCP lines: Proto Local Foreign State PID
-            if parts.len() < 5 {
-                continue;
-            }
-            let state = parts[3];
-            if state != "LISTENING" {
-                continue;
-            }
-            match parts[4].parse::<u32>() {
-                Ok(p) => p,
-                Err(_) => continue,
-            }
-        } else {
-            // UDP lines: Proto Local Foreign PID (no State)
-            if parts.len() < 4 {
-                continue;
-            }
-            match parts[3].parse::<u32>() {
-                Ok(p) => p,
-                Err(_) => continue,
-            }
-        };
-
-        // Skip System Idle Process (PID 0)
-        if pid == 0 {
-            continue;
-        }
-
-        // Resolve process name
-        let process_name = process_map.get(&pid).cloned().unwrap_or_else(|| "Unknown".to_string());
+        let process_name = process_map
+            .get(&parsed.pid)
+            .cloned()
+            .unwrap_or_else(|| "Unknown".to_string());
 
         ports.push(PortInfo {
-            port,
-            protocol: proto.to_string(),
-            pid,
+            port: parsed.port,
+            protocol: parsed.protocol,
+            pid: parsed.pid,
             process_name,
         });
     }
 
-    // Deduplicate: Group by port + protocol, prioritizing non-empty/non-unknown process names
     let mut unique_ports = HashMap::new();
     for p in ports {
         let key = (p.port, p.protocol.clone());
-        unique_ports.entry(key)
+        unique_ports
+            .entry(key)
             .and_modify(|existing: &mut PortInfo| {
-                // If existing has an unknown/empty name but the new one has a valid name, update it
-                if (existing.process_name == "Unknown" || existing.process_name.is_empty()) && p.process_name != "Unknown" {
+                if (existing.process_name == "Unknown" || existing.process_name.is_empty())
+                    && p.process_name != "Unknown"
+                {
                     *existing = p.clone();
                 }
             })
             .or_insert(p);
     }
-    
+
     let mut result: Vec<PortInfo> = unique_ports.into_values().collect();
-    // Sort by port number ascending
     result.sort_by_key(|p| p.port);
 
     Ok(result)
@@ -152,7 +153,7 @@ pub async fn kill_process_by_pid(pid: u32) -> Result<(), PortPurgeError> {
     cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
 
     let output = cmd.output().map_err(|e| PortPurgeError::CommandError(e.to_string()))?;
-    
+
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -168,4 +169,57 @@ pub async fn kill_process_by_pid(pid: u32) -> Result<(), PortPurgeError> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_netstat_line;
+
+    #[test]
+    fn parse_netstat_line_tcp_localhost() {
+        let parsed = parse_netstat_line("  TCP    127.0.0.1:3000         0.0.0.0:0              LISTENING       1234")
+            .unwrap();
+        assert_eq!(parsed.port, 3000);
+        assert_eq!(parsed.protocol, "TCP");
+        assert_eq!(parsed.pid, 1234);
+    }
+
+    #[test]
+    fn parse_netstat_line_tcp_ipv6_loopback() {
+        let parsed = parse_netstat_line("  TCP    [::1]:5173             [::]:0                 LISTENING       5678")
+            .unwrap();
+        assert_eq!(parsed.port, 5173);
+        assert_eq!(parsed.pid, 5678);
+    }
+
+    #[test]
+    fn parse_netstat_line_udp_localhost() {
+        let parsed = parse_netstat_line("  UDP    127.0.0.1:5353         *:*                                    9999")
+            .unwrap();
+        assert_eq!(parsed.port, 5353);
+        assert_eq!(parsed.protocol, "UDP");
+        assert_eq!(parsed.pid, 9999);
+    }
+
+    #[test]
+    fn parse_netstat_line_rejects_non_listening_tcp() {
+        assert!(parse_netstat_line("  TCP    127.0.0.1:3000         0.0.0.0:0              ESTABLISHED     1234").is_none());
+    }
+
+    #[test]
+    fn parse_netstat_line_rejects_all_interfaces() {
+        assert!(parse_netstat_line("  TCP    0.0.0.0:80             0.0.0.0:0              LISTENING       4").is_none());
+        assert!(parse_netstat_line("  TCP    [::]:8080              [::]:0                 LISTENING       4").is_none());
+    }
+
+    #[test]
+    fn parse_netstat_line_rejects_lan_address() {
+        assert!(parse_netstat_line("  TCP    192.168.1.10:3000      0.0.0.0:0              LISTENING       1234").is_none());
+    }
+
+    #[test]
+    fn parse_netstat_line_rejects_header_and_malformed() {
+        assert!(parse_netstat_line("  Proto  Local Address").is_none());
+        assert!(parse_netstat_line("  TCP    127.0.0.1:bad          0.0.0.0:0              LISTENING       1234").is_none());
+    }
 }
