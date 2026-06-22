@@ -80,7 +80,8 @@
 @media (prefers-reduced-motion: reduce) {
   .animate-slide-in,
   .animate-fade-in,
-  .animate-shimmer {
+  .animate-shimmer,
+  .animate-spin {
     animation: none;
   }
 }
