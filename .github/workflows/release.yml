@@ -33,6 +33,9 @@ jobs:
           
       - name: install node dependencies
         run: npm ci
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture
           
       - name: Build and publish Tauri app
         uses: tauri-apps/tauri-action@v0
