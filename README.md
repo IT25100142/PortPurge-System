@@ -63,12 +63,21 @@ Ensure you have Node.js and Rust installed on your machine.
 
 1.  Clone or navigate to the project directory:
     ```bash
-    cd portpurge
+    cd PortPurge-System
     ```
 2.  Install frontend dependencies:
     ```bash
     npm install
     ```
+
+### Local Development Configuration
+
+For remote or mobile Tauri development, you can bind the Vite dev server to a specific host. Copy `.env.example` to `.env` and set `TAURI_DEV_HOST` if needed:
+
+```bash
+# .env.example
+# TAURI_DEV_HOST=192.168.1.10
+```
 
 ---
 
@@ -80,8 +89,10 @@ Launch the application locally in development mode:
 npm run tauri dev
 ```
 
-### Run Unit Tests
-Run backend Rust test suites (verifies port-to-process parsing functions):
+### Run Backend Tests
+
+Run the Rust backend test suite. This includes live OS integration tests (`get_active_ports` against the real system) and parser fixture tests for `netstat` / `lsof` output (localhost filtering, malformed lines, etc.):
+
 ```bash
 cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture
 ```
