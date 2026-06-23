@@ -6,7 +6,7 @@
 
 - **Why it exists:** Developers frequently encounter "port already in use" errors during local development. PortPurge provides a fast visual dashboard instead of manually running `netstat`, `lsof`, or `taskkill`.
 - **Target users:** Software developers debugging local port conflicts on Windows, macOS, or Linux.
-- **Current maturity:** Early-stage **v0.1.0** — functional core features, minimal test coverage, monolithic UI in a single React component.
+- **Current maturity:** Early-stage **v0.1.0** — functional core features, expanded Rust test suite (parser fixtures + shared helpers), UI split into focused React components with state/orchestration in `App.tsx`.
 - **Project type:** Tauri v2 desktop application (native shell + webview UI). **Not** a web server, SPA deployment, or mobile app.
 - **Core domain purpose:** Local port monitoring and process termination via OS-level shell commands.
 
@@ -26,8 +26,9 @@ Identified in: `README.md`, `package.json`, `src/App.tsx`, `src-tauri/Cargo.toml
 | **Tauri** | v2 | `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` |
 | **Rust** | Edition 2021 | `src-tauri/Cargo.toml` |
 | **Serde / serde_json** | v1 | `src-tauri/Cargo.toml` — IPC serialization |
+| **thiserror** | v2 | `src-tauri/Cargo.toml` — `PortPurgeError` derive |
 | **Tauri plugins** | opener, single-instance, updater, process | `src-tauri/src/lib.rs`, `src-tauri/capabilities/default.json` |
-| **IPC client** | `@tauri-apps/api` `invoke()` | `src/App.tsx` |
+| **IPC client** | `@tauri-apps/api` `invoke()`, `getVersion()` | `src/App.tsx` |
 | **Package manager** | npm | `package-lock.json`, `package.json` scripts |
 | **Database** | None | — |
 | **ORM** | None | — |
@@ -35,11 +36,12 @@ Identified in: `README.md`, `package.json`, `src/App.tsx`, `src-tauri/Cargo.toml
 | **HTTP API** | None | — |
 | **State management** | React `useState` / `useCallback` / `useEffect` only | `src/App.tsx` |
 | **Validation** | TypeScript types + Rust `u32` for PID | `src/App.tsx`, `src-tauri/src/sys/mod.rs` |
-| **Testing** | Rust `#[test]` only (1 integration test) | `src-tauri/src/lib.rs` |
-| **CI/CD** | GitHub Actions + `tauri-apps/tauri-action` | `.github/workflows/release.yml` |
+| **Testing** | Rust `#[test]` — 18 on Windows / 25 on Unix (platform `#[cfg]` gates `unix.rs` tests) | `src-tauri/src/**/*.rs` |
+| **Linting** | ESLint 9 + typescript-eslint + Prettier (frontend); `cargo clippy` + `cargo fmt` (backend via npm scripts) | `eslint.config.js`, `.prettierrc`, `package.json` |
+| **CI/CD** | GitHub Actions + `tauri-apps/tauri-action`; `cargo test` before build (no `npm run lint` in CI) | `.github/workflows/release.yml` |
 | **Deployment** | Desktop installers via `tauri build`; auto-updater via GitHub Releases | `tauri.conf.json`, `release.yml` |
 
-**Not present:** ESLint, Prettier, Vitest/Jest, Playwright, Docker, database drivers, web frameworks (Express, etc.).
+**Not present:** Vitest/Jest, Playwright, Docker, database drivers, web frameworks (Express, etc.). **Present but not in CI:** ESLint, Prettier, `cargo clippy`, `cargo fmt` (via `npm run lint` / `npm run format`).
 
 ---
 
@@ -47,32 +49,55 @@ Identified in: `README.md`, `package.json`, `src/App.tsx`, `src-tauri/Cargo.toml
 
 ```
 PortPurge-System/
-├── ai/                          # AI assistant documentation (this folder)
+├── ai/                          # AI assistant documentation
+│   ├── PROJECT_CONTEXT.md       # This file
+│   ├── AI_RULES.md              # Operational rules for AI agents
+│   ├── ARCHITECTURE_DECISIONS.md
+│   └── PROMPT_PATTERNS.md
 ├── .github/workflows/
 │   └── release.yml              # Multi-platform release on v* tags
 ├── .vscode/
 │   └── extensions.json          # Recommends Tauri + rust-analyzer extensions
 ├── public/
-│   └── tauri.svg                # Static asset
+│   ├── tauri.svg                # Favicon (referenced by index.html)
+│   ├── vite.svg                 # Static asset
+│   └── illustrations/           # WebP empty-state / toast artwork
+│       ├── empty-ports.webp
+│       ├── no-results.webp
+│       └── permission-denied.webp
 ├── src/                         # React frontend (webview UI)
 │   ├── main.tsx                 # React entry point
-│   ├── App.tsx                  # Entire application UI + IPC client (~570 lines)
-│   ├── index.css                # Tailwind import + custom animations
+│   ├── App.tsx                  # App shell, state, IPC, updater orchestration (~348 lines)
+│   ├── types.ts                 # Shared TS interfaces (PortInfo, Toast, etc.)
+│   ├── components/              # Presentational UI components
+│   │   ├── PortTable.tsx        # Port list table + empty states
+│   │   ├── SearchFilters.tsx    # Search input + protocol pills
+│   │   ├── MetricsBar.tsx       # TCP/UDP/total counts
+│   │   ├── KillConfirmModal.tsx # Kill confirmation dialog
+│   │   ├── UpdateModal.tsx      # In-app updater modal
+│   │   ├── ToastContainer.tsx   # Toast notifications
+│   │   └── EmptyState.tsx       # No-ports / no-results / permission states
+│   ├── index.css                # Tailwind v4 @theme tokens + glass utilities + animations
 │   └── vite-env.d.ts            # Vite type references
 ├── src-tauri/                   # Rust backend (Tauri native layer)
 │   ├── src/
 │   │   ├── main.rs              # Binary entry → portpurge_lib::run()
 │   │   ├── lib.rs               # Tauri builder, IPC commands, tray, plugins
 │   │   └── sys/
-│   │       ├── mod.rs           # PortInfo, PortPurgeError, platform re-exports
-│   │       ├── windows.rs       # netstat, tasklist, taskkill
-│   │       └── unix.rs          # lsof, kill -9
+│   │       ├── mod.rs           # Protocol, PortInfo, PortPurgeError, dedupe, localhost helpers
+│   │       ├── windows.rs       # netstat parser, tasklist, taskkill (spawn_blocking)
+│   │       └── unix.rs          # lsof parser, kill -9 (spawn_blocking)
+│   ├── icons/                   # App bundle icons (png, icns, ico, platform sets)
 │   ├── capabilities/
 │   │   └── default.json         # Tauri v2 permission capabilities
 │   ├── Cargo.toml               # Rust dependencies
 │   ├── Cargo.lock
 │   ├── build.rs                 # tauri_build::build()
 │   └── tauri.conf.json          # App config, bundle, updater
+├── .env.example                 # Documents optional TAURI_DEV_HOST
+├── eslint.config.js             # ESLint flat config (TS/TSX, React hooks)
+├── .prettierrc                  # Prettier formatting rules
+├── .prettierignore              # Prettier exclusions (dist, node_modules, target)
 ├── index.html                   # Vite HTML shell
 ├── package.json                 # npm scripts and frontend deps
 ├── vite.config.ts               # Vite dev server (port 1420)
@@ -82,10 +107,9 @@ PortPurge-System/
 ```
 
 **Absent folders (by design or not yet created):**
-- No `src/components/`, `src/pages/`, `src/hooks/` — all UI is in `App.tsx`
+- No `src/pages/`, `src/hooks/` — routing and custom hooks not used
 - No `routes/`, `controllers/`, `services/` — no HTTP backend
 - No frontend `tests/` directory
-- No `src-tauri/icons/` in repo (referenced by `tauri.conf.json` but missing)
 
 **Generated / gitignored (do not document contents):** `node_modules/`, `dist/`, `src-tauri/target/`.
 
@@ -95,40 +119,46 @@ PortPurge-System/
 
 ### 4.1 Real-Time Port Monitoring
 
-- **Purpose:** Display active TCP listeners and UDP binds with port, protocol, PID, and process name.
-- **User behavior:** Dashboard auto-refreshes every 3 seconds (toggleable); manual refresh available.
-- **Flow:** `App.tsx` → `invoke("get_active_ports")` → `lib.rs` → `sys::get_active_ports()` → OS shell command → parse → `PortInfo[]`.
-- **Important files:** `src/App.tsx` (polling), `src-tauri/src/sys/windows.rs`, `src-tauri/src/sys/unix.rs`.
-- **Note:** README claims localhost-only scanning; **code does not filter by address** — see Section 14.
+- **Purpose:** Display active TCP listeners and UDP binds on **localhost only** (`127.0.0.1`, `::1`, `localhost`) with port, protocol, PID, and process name.
+- **User behavior:** Dashboard auto-refreshes every 3 seconds (toggleable); manual refresh shows success toast and "Updated" timestamp.
+- **Flow:** `App.tsx` → `invoke("get_active_ports")` → `lib.rs` → `sys::get_active_ports()` → `spawn_blocking` shell command → parse with localhost filter → `dedupe_and_sort_ports()` → `PortInfo[]`.
+- **Important files:** `src/App.tsx` (polling), `src-tauri/src/sys/mod.rs` (`is_localhost_address`, `host_from_addr_port`, `dedupe_and_sort_ports`), `src-tauri/src/sys/windows.rs`, `src-tauri/src/sys/unix.rs`.
+- **Localhost filter:** Implemented in both platform parsers via `is_localhost_address()` — rejects `0.0.0.0`, `*`, `[::]`, and LAN addresses. Identified in: `sys/mod.rs`, `sys/windows.rs`, `sys/unix.rs`.
 
 ### 4.2 Search and Protocol Filtering
 
 - **Purpose:** Narrow the port table by port number, PID, process name, or protocol.
 - **User behavior:** Text search + ALL/TCP/UDP filter pills.
-- **Flow:** Client-side filter on `ports` state in `App.tsx` (`filteredPorts`).
-- **Important files:** `src/App.tsx` lines 201–213.
+- **Flow:** Client-side filter on `ports` state in `App.tsx` (`filteredPorts`); UI in `SearchFilters.tsx`.
+- **Important files:** `src/App.tsx`, `src/components/SearchFilters.tsx`.
 
 ### 4.3 Process Kill (Purge)
 
 - **Purpose:** Terminate a process owning a port.
-- **User behavior:** Click Kill → Confirm → row disappears optimistically; rollback + error toast on failure.
-- **Flow:** `invoke("kill_process_by_pid", { pid })` → `sys::kill_process_by_pid()` → `taskkill` (Windows) or `kill -9` (Unix).
-- **Important files:** `src/App.tsx` (`killProcess`), `src-tauri/src/sys/windows.rs`, `src-tauri/src/sys/unix.rs`.
+- **User behavior:** Click Kill → `KillConfirmModal` → Confirm → row disappears optimistically; rollback + error toast on failure.
+- **Flow:** `invoke("kill_process_by_pid", { pid })` → `sys::kill_process_by_pid()` via `spawn_blocking` → `taskkill` (Windows) or `kill -9` (Unix).
+- **Important files:** `src/App.tsx` (`killProcess`, `killTarget` state), `src/components/KillConfirmModal.tsx`, `src-tauri/src/sys/windows.rs`, `src-tauri/src/sys/unix.rs`.
 
 ### 4.4 Toast Notifications
 
 - **Purpose:** Feedback for refresh, kill success/failure, and updater events.
 - **User behavior:** Toasts appear bottom-right, auto-dismiss after 4 seconds.
-- **Important files:** `src/App.tsx` (`showToast`, `removeToast`, toast container).
+- **Important files:** `src/App.tsx` (`showToast`, `removeToast`), `src/components/ToastContainer.tsx`.
 
 ### 4.5 In-App Updater
 
 - **Purpose:** Check for new versions on startup and install from GitHub Releases.
-- **User behavior:** Modal shows version comparison and release notes; Install Update downloads and relaunches.
+- **User behavior:** Modal shows version comparison and release notes; Install Update downloads and relaunches. Current app version read at runtime via Tauri `getVersion()` API.
 - **Flow:** `@tauri-apps/plugin-updater` `check()` → modal → `downloadAndInstall()` → `@tauri-apps/plugin-process` `relaunch()`.
-- **Important files:** `src/App.tsx`, `src-tauri/tauri.conf.json` (updater endpoint + pubkey), `src-tauri/src/lib.rs` (plugin init).
+- **Important files:** `src/App.tsx` (`getVersion`, `appVersion` state), `src/components/UpdateModal.tsx` (`currentVersion` prop), `src-tauri/tauri.conf.json` (version source for `getVersion()`), `src-tauri/src/lib.rs` (plugin init).
 
-### 4.6 System Tray and Desktop Lifecycle (Rust-only)
+### 4.6 Metrics and Empty States
+
+- **Purpose:** Show TCP/UDP/total port counts; guide users when no ports match filters or none are listening.
+- **User behavior:** `MetricsBar` shows live counts; `EmptyState` variants for no ports, no search results.
+- **Important files:** `src/components/MetricsBar.tsx`, `src/components/EmptyState.tsx`, `src/components/PortTable.tsx`.
+
+### 4.7 System Tray and Desktop Lifecycle (Rust-only)
 
 - **Purpose:** Run quietly in background; prevent duplicate instances.
 - **User behavior:** Close button hides to tray; left-click tray toggles window; right-click menu: Show / Quit. Second launch focuses existing window.
@@ -148,6 +178,7 @@ main.rs → lib.rs::run()
   → Load webview (dev: http://localhost:1420, prod: ../dist)
   → main.tsx → App.tsx mounts
   → fetchPorts() on mount
+  → getVersion() → setAppVersion (Tauri only)
   → checkForUpdates() after 1.5s delay
 ```
 
@@ -158,14 +189,14 @@ App.tsx useEffect (3s interval, if autoRefresh && !killingPid)
   → fetchPorts()
   → invoke("get_active_ports")
   → lib.rs::get_active_ports()
-  → sys::get_active_ports() [platform-specific]
+  → sys::get_active_ports() [platform-specific, via spawn_blocking]
   → setPorts(activePorts)
 ```
 
 ### 5.3 Kill Flow
 
 ```
-User clicks Kill → setConfirmPid(pid)
+User clicks Kill → setKillTarget(portInfo)
 User clicks Confirm → killProcess(pid, port)
   → Optimistic: remove all rows matching pid from ports state
   → invoke("kill_process_by_pid", { pid })
@@ -176,7 +207,7 @@ User clicks Confirm → killProcess(pid, port)
 
 ### 5.4 Error Handling
 
-- **Rust:** `PortPurgeError` enum → `Display` impl → converted to `String` in `lib.rs` via `.map_err(|e| e.to_string())`.
+- **Rust:** `PortPurgeError` enum with `thiserror::Error` → `Display` impl → converted to `String` in `lib.rs` via `.map_err(|e| e.to_string())`.
 - **Frontend:** Errors caught in try/catch → `showToast(String(err), "error")`.
 - **Access denied:** Mapped from OS stderr patterns ("Access is denied", "Permission denied", etc.).
 
@@ -193,7 +224,7 @@ There is no HTTP request lifecycle. Tauri IPC is synchronous from the frontend's
 ```
 ┌─────────────────────────┐
 │   React Frontend        │
-│   (src/App.tsx)         │
+│   App.tsx + components  │
 └───────────┬─────────────┘
             │ Tauri IPC
             │ get_active_ports
@@ -220,29 +251,36 @@ There is no HTTP request lifecycle. Tauri IPC is synchronous from the frontend's
 
 | Layer | Responsibility |
 |-------|----------------|
-| `App.tsx` | UI, local state, polling, optimistic updates, updater UI |
+| `App.tsx` | State orchestration, polling, IPC calls, optimistic kill, updater logic, runtime version via `getVersion()` |
+| `src/components/*` | Presentational UI (table, modals, toasts, filters, metrics) |
+| `src/types.ts` | Shared TypeScript interfaces for IPC data shapes |
 | `lib.rs` | Tauri app lifecycle, IPC command registration, tray, plugins |
-| `sys/mod.rs` | Shared types, platform dispatch via `#[cfg]` |
-| `sys/windows.rs` / `sys/unix.rs` | OS command execution and output parsing |
+| `sys/mod.rs` | `Protocol`, shared types, localhost helpers, dedupe, platform dispatch via `#[cfg]` |
+| `sys/windows.rs` / `sys/unix.rs` | OS command execution, output parsing, localhost filtering; blocking shell I/O via `spawn_blocking` |
 
 ### Design Patterns
 
 - **Command-Query separation:** Read (`get_active_ports`) vs write (`kill_process_by_pid`) IPC commands.
 - **Strategy pattern:** Platform-specific `sys` implementations selected at compile time.
 - **Optimistic UI:** Kill removes row immediately, rolls back on failure.
+- **Blocking work off async runtime:** `get_active_ports` and `kill_process_by_pid` in `sys/` wrap `std::process::Command` in `tauri::async_runtime::spawn_blocking` so shell I/O does not block the Tauri async executor.
 
 ### Strengths
 
-- Small, inspectable codebase (~26 tracked files).
-- Clear platform abstraction boundary in `sys/`.
+- Small, inspectable codebase with clear `sys/` platform boundary.
+- Localhost-only filtering centralized in `is_localhost_address()` / `host_from_addr_port()`.
+- Deduplication prefers known process names over `"Unknown"` (`dedupe_and_sort_ports`).
 - Windows performance optimization: single `tasklist` call builds PID→name map per scan cycle.
+- Parser fixture tests for both `netstat` and `lsof` output.
+- UI decomposed into focused components; `App.tsx` handles orchestration only.
+- `cargo test` passes; `Protocol` implements `Display` for logging and integration test output.
 
 ### Weaknesses
 
-- Entire UI in one 570-line file — hard to maintain as features grow.
-- Shell-command parsing is fragile (output format changes across OS versions).
-- No unit tests for parsing logic; one live integration test only.
-- README/code mismatch on localhost filtering.
+- Shell-command parsing remains fragile (output format changes across OS versions).
+- `unix.rs` parser tests only run on non-Windows targets (`#[cfg(not(target_os = "windows"))]`).
+- No frontend tests; no Vitest/Jest/Playwright.
+- Lint/format tooling exists locally but is **not enforced in CI** (`release.yml` runs `cargo test` only).
 
 ---
 
@@ -252,12 +290,24 @@ No database or persistent data model was clearly identified from the codebase.
 
 All data is ephemeral and in-memory:
 
+### `Protocol` (Rust — `src-tauri/src/sys/mod.rs`)
+
+```rust
+pub enum Protocol {
+    Tcp,
+    Udp,
+    Other(String),  // serializes as raw OS string
+}
+```
+
+Serializes to JSON as `"TCP"` / `"UDP"` (or the raw string for `Other`). Parsed from OS output via `Protocol::parse_known()`. Implements `std::fmt::Display` (delegates to `as_str()`).
+
 ### `PortInfo` (Rust — `src-tauri/src/sys/mod.rs`)
 
 ```rust
 pub struct PortInfo {
     pub port: u16,
-    pub protocol: String,      // "TCP" or "UDP"
+    pub protocol: Protocol,
     pub pid: u32,
     pub process_name: String,
 }
@@ -265,24 +315,38 @@ pub struct PortInfo {
 
 Serde attribute: `#[serde(rename_all = "camelCase")]` — serializes `process_name` as `processName` in JSON.
 
-### `PortInfo` (TypeScript — `src/App.tsx`)
+### `PortInfo` (TypeScript — `src/types.ts`)
 
 ```typescript
-interface PortInfo {
+export interface PortInfo {
   port: number;
   protocol: string;
   pid: number;
-  process_name: string;  // Note: may mismatch serde camelCase output — see Section 14
+  processName: string;  // matches serde camelCase output
 }
 ```
+
+### Shared Rust helpers (`src-tauri/src/sys/mod.rs`)
+
+| Function / type | Purpose |
+|-----------------|---------|
+| `ParsedPort` | Intermediate parse result (Windows) before process name lookup |
+| `host_from_addr_port()` | Extract host from `127.0.0.1:8080` or `[::1]:3000` |
+| `is_localhost_address()` | Loopback check (`127.0.0.1`, `::1`, `localhost`) |
+| `dedupe_and_sort_ports()` | Dedupe by `(port, protocol)`, prefer known names, sort ascending |
 
 ### `PortPurgeError` (Rust — `src-tauri/src/sys/mod.rs`)
 
 ```rust
+#[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
 pub enum PortPurgeError {
+    #[error("Access Denied. Try running with admin/sudo privileges.")]
     AccessDenied,
+    #[error("Process not found (it may have already exited).")]
     ProcessNotFound,
+    #[error("Command error: {0}")]
     CommandError(String),
+    #[error("Unknown error: {0}")]
     Unknown(String),
 }
 ```
@@ -340,9 +404,17 @@ Configured in `src-tauri/tauri.conf.json` → `plugins.updater.endpoints`.
 | File | Purpose | Dependencies |
 |------|---------|--------------|
 | `src/main.tsx` | React bootstrap with StrictMode | `react`, `react-dom`, `App`, `index.css` |
-| `src/App.tsx` | Full dashboard UI, state, IPC, updater | `@tauri-apps/api`, updater/process plugins, lucide-react |
-| `src/index.css` | Tailwind v4 import, `animate-slide-in` keyframes | Tailwind |
-| `index.html` | HTML shell, mounts `#root` | Vite |
+| `src/App.tsx` | State, IPC, polling, kill/updater orchestration, `getVersion()` for badge | `@tauri-apps/api` (core + app), updater/process plugins, components, `types` |
+| `src/types.ts` | `PortInfo`, `Toast`, `DownloadProgress` interfaces | — |
+| `src/components/PortTable.tsx` | Port table, kill buttons, loading shimmer | `EmptyState`, lucide-react |
+| `src/components/SearchFilters.tsx` | Search input + ALL/TCP/UDP pills | — |
+| `src/components/MetricsBar.tsx` | Total/TCP/UDP count badges | — |
+| `src/components/KillConfirmModal.tsx` | Kill confirmation overlay | `types` |
+| `src/components/UpdateModal.tsx` | Updater version/download UI; receives `currentVersion` from parent | `@tauri-apps/plugin-updater` types |
+| `src/components/ToastContainer.tsx` | Toast stack (bottom-right) | `types` |
+| `src/components/EmptyState.tsx` | No-ports / no-results / permission empty states | `public/illustrations/*.webp` |
+| `src/index.css` | Tailwind v4 `@theme` tokens, glass utilities, animations | Tailwind |
+| `index.html` | HTML shell, mounts `#root`, favicon `/tauri.svg` | Vite |
 
 ### Rust Backend
 
@@ -350,9 +422,9 @@ Configured in `src-tauri/tauri.conf.json` → `plugins.updater.endpoints`.
 |------|---------|--------------|
 | `src-tauri/src/main.rs` | Binary entry, Windows subsystem attribute | `portpurge_lib` |
 | `src-tauri/src/lib.rs` | Tauri builder, IPC commands, tray, plugins, test | `sys`, tauri, plugins |
-| `src-tauri/src/sys/mod.rs` | Shared types, platform re-exports | serde |
-| `src-tauri/src/sys/windows.rs` | Windows port scan + kill via netstat/tasklist/taskkill | std::process::Command |
-| `src-tauri/src/sys/unix.rs` | Unix port scan + kill via lsof/kill | std::process::Command |
+| `src-tauri/src/sys/mod.rs` | Protocol, shared types, localhost helpers, dedupe, platform re-exports | serde, thiserror |
+| `src-tauri/src/sys/windows.rs` | `parse_netstat_line`, port scan + kill via netstat/tasklist/taskkill (`spawn_blocking`) | std::process::Command, tauri async runtime |
+| `src-tauri/src/sys/unix.rs` | `parse_lsof_line`, port scan + kill via lsof/kill (`spawn_blocking`) | std::process::Command, tauri async runtime |
 | `src-tauri/build.rs` | Tauri build hook | tauri-build |
 | `src-tauri/tauri.conf.json` | App ID, window, bundle, updater config | — |
 | `src-tauri/capabilities/default.json` | Plugin permissions for main window | — |
@@ -362,7 +434,9 @@ Configured in `src-tauri/tauri.conf.json` → `plugins.updater.endpoints`.
 | File | Purpose |
 |------|---------|
 | `vite.config.ts` | Dev server port 1420, HMR, ignore `src-tauri/` in watch |
-| `package.json` | npm scripts, frontend dependencies |
+| `eslint.config.js` | ESLint 9 flat config for `src/**/*.ts(x)` |
+| `.prettierrc` / `.prettierignore` | Code formatting scope and rules |
+| `package.json` | npm scripts, frontend dependencies, lint/format scripts |
 | `tsconfig.json` | Strict TypeScript for `src/` |
 | `.github/workflows/release.yml` | CI release on `v*` tags |
 
@@ -381,10 +455,12 @@ Configured in `src-tauri/tauri.conf.json` → `plugins.updater.endpoints`.
 - `updater.key` — private signing key
 - `updater.key.pub` — public key counterpart
 
+**`.env.example` (committed):** Documents optional `TAURI_DEV_HOST` for remote/mobile Tauri dev. Copy to `.env` if needed.
+
 **Embedded in config (public, not secret):**
 - Updater public key in `src-tauri/tauri.conf.json` → `plugins.updater.pubkey`
 
-**Missing:** No `.env.example` file exists. Consider adding one documenting only `TAURI_DEV_HOST`.
+**Note:** `.env` is gitignored; only `.env.example` is tracked.
 
 ---
 
@@ -405,7 +481,9 @@ cd PortPurge-System
 npm install
 ```
 
-Note: `README.md` says `cd portpurge` — the actual repo folder name is `PortPurge-System`.
+Optional: copy `.env.example` to `.env` and set `TAURI_DEV_HOST` for remote dev (see `README.md`).
+
+Note: `package.json` name is `portpurge`; repo folder is `PortPurge-System`.
 
 ### Local Development
 
@@ -431,7 +509,7 @@ npm run tauri build
 
 Output: `src-tauri/target/release/bundle/`
 
-**Warning:** `src-tauri/icons/` is referenced in `tauri.conf.json` but **missing from the repo** — production builds may fail until icons are added.
+Icons are present under `src-tauri/icons/` (referenced by `tauri.conf.json` bundle config).
 
 ### Run Tests
 
@@ -450,7 +528,6 @@ cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture
 |-------|-------|-----|
 | Port 1420 in use | Another process on Vite port | Stop conflicting process or change port in `vite.config.ts` and `tauri.conf.json` |
 | `lsof: command not found` | Missing on minimal Linux | Install `lsof` package |
-| Build fails on icons | Missing `src-tauri/icons/` | Add required icon files per `tauri.conf.json` |
 | Kill fails with Access Denied | Insufficient OS privileges | Run as admin/sudo |
 
 ---
@@ -461,8 +538,10 @@ cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture
 
 | Change Type | Location |
 |-------------|----------|
-| New UI / dashboard feature | `src/App.tsx` or new files under `src/components/` |
+| New UI / dashboard feature | `src/components/` for presentational UI; state/IPC in `src/App.tsx` |
+| Shared TS types | `src/types.ts` |
 | New backend capability | `#[tauri::command]` in `src-tauri/src/lib.rs` + implementation in `sys/` |
+| Shared port logic (both platforms) | `src-tauri/src/sys/mod.rs` |
 | Platform-specific logic | `src-tauri/src/sys/windows.rs` AND `src-tauri/src/sys/unix.rs` |
 | New Tauri plugin | `Cargo.toml` + `lib.rs` plugin init + `capabilities/default.json` permissions |
 | Styling | Tailwind classes in components; global animations in `src/index.css` |
@@ -473,15 +552,23 @@ cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture
 - **Rust:** snake_case for functions/variables; `#[cfg(target_os)]` for platform code.
 - **TypeScript:** camelCase for variables/functions; PascalCase for components; interfaces for data shapes.
 - **IPC:** Command names use snake_case (`get_active_ports`, `kill_process_by_pid`).
-- **UI:** Dark theme, glassmorphism (`backdrop-blur-xl`), indigo/violet gradients — follow patterns in `App.tsx`.
+- **UI:** Dark theme via `@theme` tokens in `index.css` (`surface-base`, `accent-primary`), glass utilities (`glass-panel`, `glass-control`), indigo/violet gradients — follow patterns in existing components.
 
 ### Version Bumping
 
-Sync version across:
+Sync version across (UI reads version at runtime from `tauri.conf.json` via `getVersion()` — no hardcoded badge strings):
 - `package.json` → `"version"`
 - `src-tauri/tauri.conf.json` → `"version"`
 - `src-tauri/Cargo.toml` → `version`
-- `src/App.tsx` → hardcoded `v0.1.0` in header and update modal
+
+### Lint and Format Commands
+
+```bash
+npm run lint              # eslint . + cargo clippy (all targets)
+npm run lint:frontend     # eslint only
+npm run lint:backend      # cargo clippy only
+npm run format            # prettier (frontend) + cargo fmt (backend)
+```
 
 ### Safest AI Editing Practices
 
@@ -490,7 +577,8 @@ Sync version across:
 3. Never assume HTTP API or database exists.
 4. Update both Windows and Unix `sys/` modules for platform behavior changes.
 5. Register new commands in `invoke_handler` after adding `#[tauri::command]`.
-6. Run `npm run build` and `cargo test` before considering work complete.
+6. Run `npm run build`, `cargo test`, and `npm run lint` before considering work complete.
+7. Keep blocking shell I/O inside `spawn_blocking` in `sys/` — do not call `Command::output()` directly on the async executor.
 
 ---
 
@@ -500,63 +588,82 @@ Sync version across:
 
 | Area | Framework | Status |
 |------|-----------|--------|
-| Rust backend | `cargo test` | 1 test in `lib.rs` |
+| Rust backend | `cargo test` | 18 tests on Windows; 25 on Unix/macOS/Linux (includes 7 `unix.rs` parser tests) |
 | Frontend | None | No Vitest/Jest/Playwright |
 
-### Existing Test
+### Existing Tests
 
-`test_get_active_ports` in `src-tauri/src/lib.rs`:
-- Integration-style: calls live `sys::get_active_ports()` against the real OS.
-- Asserts `Ok` result; prints up to 15 ports.
-- **Not** a unit test of parsing logic with fixtures.
+| Location | Count (platform) | Coverage |
+|----------|------------------|----------|
+| `src-tauri/src/sys/mod.rs` | 9 (all) | `dedupe_and_sort_ports`, `is_localhost_address`, `host_from_addr_port`, serde camelCase, `Protocol` serialization + `Display`, error display strings |
+| `src-tauri/src/sys/windows.rs` | 8 (Windows only) | `parse_netstat_line` fixtures (localhost, reject LAN/wildcard/malformed), `throughput_baseline` |
+| `src-tauri/src/sys/unix.rs` | 7 (Unix only) | `parse_lsof_line` fixtures (localhost, reject wildcard/LAN/non-listening) |
+| `src-tauri/src/lib.rs` | 1 (all) | `test_get_active_ports` — live OS integration against real `sys::get_active_ports()` |
+
+**Status:** `cargo test --manifest-path src-tauri/Cargo.toml` passes (verified on Windows: 18 passed). Unix-only tests are compiled and run only on non-Windows targets.
 
 ### Linting and Formatting
 
+- **ESLint 9** flat config (`eslint.config.js`): `typescript-eslint`, `react-hooks`, `react-refresh`, `eslint-config-prettier`. Ignores `dist`, `node_modules`, `src-tauri`.
+- **Prettier** (`.prettierrc`, `.prettierignore`): formats `src/**/*.{ts,tsx,css}` and root `*.{html,json,ts}`; ignores `dist`, `node_modules`, `src-tauri/target`.
+- **Rust:** `cargo clippy` and `cargo fmt` invoked via `npm run lint:backend` / `npm run format:backend`. No committed `rustfmt.toml` or `clippy.toml` — uses toolchain defaults. Clippy may emit warnings (e.g. `needless_borrows_for_generic_args` in `sys/unix.rs` as of last inspection).
 - **TypeScript:** `strict: true`, `noUnusedLocals`, `noUnusedParameters` in `tsconfig.json`. Type-check via `tsc` in `npm run build`.
-- **No ESLint, Prettier, Biome** configured.
-- **No Rust clippy or rustfmt** config files.
 
 ### CI Quality Gates
 
-`.github/workflows/release.yml` builds and publishes on `v*` tag push only. **No test or lint steps in CI.**
+`.github/workflows/release.yml` runs `cargo test --manifest-path src-tauri/Cargo.toml` on all platforms before `tauri-apps/tauri-action` build/publish. Triggered on `v*` tag push only. **Does not run** `npm run lint`, `npm run build`, or `cargo clippy` in CI.
 
 ### Test Commands
 
 ```bash
 npm run build                                                          # TypeScript check + Vite build
+npm run lint                                                           # ESLint + cargo clippy
+npm run format                                                         # Prettier + cargo fmt
 cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture         # Rust tests
 npm run tauri dev                                                      # Manual smoke test
 ```
 
 ### Missing Tests
 
-- Parser unit tests for `netstat` / `lsof` output (with fixture strings).
 - Frontend component tests.
-- IPC contract tests.
+- IPC contract tests (Rust ↔ TypeScript field naming).
 - Kill flow error handling tests.
 
 ---
 
 ## 14. Known Issues, TODOs, and Incomplete Parts
 
-**No `TODO`, `FIXME`, or `HACK` comments** were found in source files.
+**No `TODO`, `FIXME`, or `HACK` comments** were found in source files (`.rs`, `.tsx`, `.ts`).
 
 ### Documented Gaps and Issues
 
 | Issue | File(s) | Details |
 |-------|---------|---------|
-| README localhost claim | `README.md` vs `sys/windows.rs`, `sys/unix.rs` | README says ports "bound on localhost"; code lists **all** TCP listeners and UDP binds with no `127.0.0.1` / `::1` filter |
-| README folder name | `README.md` | Says `cd portpurge`; repo is `PortPurge-System` |
-| README test description | `README.md` vs `lib.rs` | README says "parsing unit tests"; actual test is live OS integration |
-| Missing icons | `tauri.conf.json` | References `src-tauri/icons/*` but directory not in repo |
-| Missing favicon | `index.html` | References `/vite.svg`; `public/` only has `tauri.svg` |
-| Placeholder metadata | `Cargo.toml`, `index.html` | Authors `["you"]`; HTML title "Tauri + React + Typescript" |
-| Serde/TS field naming | `sys/mod.rs`, `App.tsx` | Rust uses `#[serde(rename_all = "camelCase")]` → JSON `processName`; TS interface uses `process_name` — **needs human confirmation** whether this works at runtime |
-| `console.error` | `App.tsx` line 116 | Updater failure logged to console |
+| `console.error` | `App.tsx` line ~124 | Updater failure logged only when `!import.meta.env.DEV` |
 | Optimistic kill by PID | `App.tsx` | Removes all rows sharing the same PID, not just the targeted port row |
 | SIGKILL on Unix | `sys/unix.rs` | Uses `kill -9` with no graceful shutdown attempt |
-| No `.env.example` | — | Only `TAURI_DEV_HOST` is used; undocumented for new contributors |
-| Version hardcoded in UI | `App.tsx` | `v0.1.0` in header and update modal not read from `package.json` |
+| Clippy warnings | `sys/unix.rs` (and possibly others) | `cargo clippy` passes with warnings (e.g. `needless_borrows_for_generic_args`) |
+| No LICENSE file | repo root | Usage terms unclear |
+| README architecture diagram | `README.md` | Still shows monolithic `App.tsx Dashboard` — components not reflected |
+| Lint/format not in CI | `.github/workflows/release.yml` | `npm run lint` and `npm run build` not gated before release |
+
+### Resolved Since Prior Documentation
+
+| Former issue | Status |
+|--------------|--------|
+| README localhost claim vs code | **Resolved** — `is_localhost_address()` filters in both platform parsers |
+| Missing `src-tauri/icons/` | **Resolved** — `src-tauri/icons/` present with full icon set |
+| Missing `.env.example` | **Resolved** — `.env.example` committed |
+| Serde/TS `processName` mismatch | **Resolved** — `src/types.ts` uses `processName` |
+| Missing favicon | **Resolved** — `index.html` points to `/tauri.svg` |
+| No CI tests | **Resolved** — `cargo test` step added to `release.yml` |
+| No parser unit tests | **Resolved** — fixture tests in `windows.rs`, `unix.rs`, `mod.rs` |
+| Monolithic 570-line `App.tsx` | **Partially resolved** — split into 7 components (~348 lines in `App.tsx`) |
+| Hardcoded UI version strings | **Resolved** — `getVersion()` from `@tauri-apps/api/app`; `UpdateModal` receives `currentVersion` prop |
+| No ESLint / Prettier / clippy | **Resolved** — `eslint.config.js`, `.prettierrc`, `npm run lint` / `npm run format` scripts |
+| `Protocol` compile error / missing `Display` | **Resolved** — `impl Display for Protocol` in `sys/mod.rs`; `cargo test` passes |
+| Missing `public/illustrations/` | **Resolved** — three `.webp` files under `public/illustrations/` |
+| `ai/AI_RULES.md` monolithic UI rule | **Resolved** — updated to component-based frontend guidance |
 
 ---
 
@@ -621,30 +728,32 @@ Standard npm and Cargo dependencies. No automated vulnerability scanning configu
 ### Forbidden Risky Behavior
 
 - Committing secrets or signing keys.
-- Rewriting `App.tsx` entirely without explicit request.
-- Changing `netstat`/`lsof` parsing without fixture-based tests.
-- Modifying only one platform module when behavior should be cross-platform.
+- Rewriting `App.tsx` or component files entirely without explicit request.
+- Changing `netstat`/`lsof` parsing without updating fixture tests in the same module.
+- Modifying only one platform module when behavior should be cross-platform (prefer shared logic in `mod.rs` for localhost filtering, dedupe).
 - Adding database/ORM without explicit request.
 - Removing tray, single-instance, or minimize-to-tray without explicit request.
 
 ### Safe Modification Patterns
 
 - **New IPC command:** Add handler in `lib.rs` → implement in `sys/` → register in `invoke_handler` → call from `App.tsx`.
-- **UI change:** Edit targeted section in `App.tsx`; match existing Tailwind patterns.
+- **UI change:** Edit targeted component in `src/components/` or state logic in `App.tsx`; match existing Tailwind `@theme` / glass patterns.
 - **Version bump:** Update all version locations listed in Section 12.
 
 ### Testing Expectations
 
 - Run `cargo test` after Rust changes.
 - Run `npm run build` after TypeScript changes.
+- Run `npm run lint` before considering work complete (local; not in CI).
 - Manually smoke-test with `npm run tauri dev` for UI/IPC changes.
 
 ### Common Pitfalls
 
-- Assuming localhost filtering exists (it does not in code).
-- Forgetting to update both `windows.rs` and `unix.rs`.
-- Mismatching serde field names between Rust and TypeScript.
-- Missing icon files causing `tauri build` failure.
+- Forgetting shared helpers in `sys/mod.rs` when changing localhost or dedupe behavior.
+- Forgetting to update both `windows.rs` and `unix.rs` parser tests when changing parse logic.
+- Assuming all 25 Rust tests run on every OS — `unix.rs` tests are `#[cfg(not(target_os = "windows"))]`.
+- Adding UI assets under wrong path — illustrations live in `public/illustrations/*.webp`.
+- Calling `std::process::Command` directly in async `sys` functions — use `tauri::async_runtime::spawn_blocking` (existing pattern in both platform modules).
 
 ---
 
@@ -654,28 +763,23 @@ Standard npm and Cargo dependencies. No automated vulnerability scanning configu
 
 | Issue | Why It Matters | First Step | Related Files |
 |-------|----------------|------------|---------------|
-| Missing `src-tauri/icons/` | `tauri build` likely fails | Generate/add Tauri default icons | `tauri.conf.json` |
-| README localhost mismatch | Misleading docs / user expectations | Decide: add filter in `sys/` or fix README | `README.md`, `sys/*.rs` |
-| Serde/TS field naming | Process names may not display correctly | Verify runtime JSON shape; align Rust or TS | `sys/mod.rs`, `App.tsx` |
-| No CI tests | Regressions ship to releases | Add `cargo test` step to workflow | `.github/workflows/release.yml` |
+| No frontend tests | UI regressions undetected | Add Vitest for key components | `src/components/` |
+| CI lacks lint/build gates | TS/clippy issues could reach release | Add `npm run build` and `npm run lint` to `release.yml` | `.github/workflows/release.yml` |
 
 ### Medium Priority
 
 | Issue | Why It Matters | First Step | Related Files |
 |-------|----------------|------------|---------------|
-| Monolithic `App.tsx` | Hard to maintain | Extract table, toasts, update modal to components | `src/App.tsx` |
-| No parser unit tests | OS output changes break silently | Add fixture-based tests for netstat/lsof parsing | `sys/windows.rs`, `sys/unix.rs` |
-| No `.env.example` | Undocumented dev config | Add file with `TAURI_DEV_HOST` | repo root |
-| No lint/format tooling | Inconsistent code quality | Add ESLint + rustfmt or clippy | repo root |
+| README architecture diagram stale | Shows monolithic `App.tsx` only | Update diagram to mention `src/components/` | `README.md` |
+| Clippy warnings in `sys/` | Noise may hide real issues | Run `cargo clippy --fix` or address warnings | `sys/unix.rs`, `sys/windows.rs` |
+| `ai/AI_RULES.md` lint guidance | AI agents may not know to run `npm run lint` | Add lint/format expectations to AI_RULES | `ai/AI_RULES.md` |
 
 ### Low Priority
 
 | Issue | Why It Matters | First Step | Related Files |
 |-------|----------------|------------|---------------|
-| Generic `index.html` title | Unpolished UX | Set title to "PortPurge" | `index.html` |
-| Hardcoded version in UI | Drift from package version | Read version from import or Tauri API | `App.tsx`, `package.json` |
 | Missing LICENSE | Unclear usage terms | Add license file | repo root |
-| Missing favicon | Broken icon reference | Add `vite.svg` or point to `tauri.svg` | `index.html`, `public/` |
+| Graceful kill on Unix | `kill -9` is abrupt | Try `kill` (SIGTERM) before SIGKILL | `sys/unix.rs` |
 
 ---
 
@@ -686,7 +790,8 @@ Standard npm and Cargo dependencies. No automated vulnerability scanning configu
 | Layer | File |
 |-------|------|
 | HTML | `index.html` |
-| React | `src/main.tsx` → `src/App.tsx` |
+| React | `src/main.tsx` → `src/App.tsx` + `src/components/*` |
+| Types | `src/types.ts` |
 | Rust binary | `src-tauri/src/main.rs` → `src-tauri/src/lib.rs` |
 
 ### npm Scripts
@@ -698,6 +803,10 @@ Standard npm and Cargo dependencies. No automated vulnerability scanning configu
 | `npm run preview` | Preview production build |
 | `npm run tauri dev` | Full desktop app in dev mode |
 | `npm run tauri build` | Production desktop installer |
+| `npm run lint` | ESLint (frontend) + cargo clippy (backend) |
+| `npm run lint:frontend` | ESLint only |
+| `npm run lint:backend` | cargo clippy only |
+| `npm run format` | Prettier (frontend) + cargo fmt (backend) |
 
 ### IPC Commands
 
@@ -710,15 +819,20 @@ Standard npm and Cargo dependencies. No automated vulnerability scanning configu
 
 | Concern | Path |
 |---------|------|
-| UI | `src/App.tsx` |
+| UI orchestration | `src/App.tsx` |
+| UI components | `src/components/` |
+| Shared TS types | `src/types.ts` |
 | IPC handlers | `src-tauri/src/lib.rs` |
+| Shared port logic | `src-tauri/src/sys/mod.rs` |
 | Windows logic | `src-tauri/src/sys/windows.rs` |
 | Unix logic | `src-tauri/src/sys/unix.rs` |
-| Shared types | `src-tauri/src/sys/mod.rs` |
 | App config | `src-tauri/tauri.conf.json` |
+| Bundle icons | `src-tauri/icons/` |
 | Permissions | `src-tauri/capabilities/default.json` |
+| Dev env template | `.env.example` |
 | CI release | `.github/workflows/release.yml` |
 | AI docs | `ai/` |
+| Illustrations | `public/illustrations/` |
 
 ### Common Workflows
 
@@ -730,11 +844,12 @@ Standard npm and Cargo dependencies. No automated vulnerability scanning configu
 
 **Fix port parsing bug:**
 1. Reproduce on target OS with `npm run tauri dev`
-2. Fix parser in `sys/windows.rs` or `sys/unix.rs`
-3. Run `cargo test`
+2. Fix parser in `sys/windows.rs` or `sys/unix.rs` (or shared helper in `mod.rs`)
+3. Update fixture tests in the same file
+4. Run `cargo test`
 
 **Release a new version:**
-1. Bump version in `package.json`, `Cargo.toml`, `tauri.conf.json`, `App.tsx`
+1. Bump version in `package.json`, `Cargo.toml`, `tauri.conf.json` (UI picks up via `getVersion()`)
 2. Tag `vX.Y.Z` and push
 3. CI creates draft GitHub Release
 
@@ -756,6 +871,10 @@ Standard npm and Cargo dependencies. No automated vulnerability scanning configu
 | **netstat** | Windows built-in command listing network connections (`netstat -ano`) |
 | **lsof** | Unix "list open files" command used here to find network sockets (`lsof -i -P -n`) |
 | **taskkill** | Windows command to terminate processes (`taskkill /F /PID`) |
+| **Localhost filter** | Only ports bound to loopback (`127.0.0.1`, `::1`, `localhost`) are shown — enforced in platform parsers |
+| **Protocol** | Rust enum (`Tcp`/`Udp`/`Other`) serializing to JSON strings for IPC |
+| **dedupe_and_sort_ports** | Shared Rust helper that deduplicates by port+protocol and sorts results |
+| **spawn_blocking** | Tauri async pattern used in `sys/` to run blocking `Command::output()` off the main async executor |
 | **SIGKILL (`kill -9`)** | Forceful Unix signal that immediately terminates a process |
 
 ---
@@ -764,21 +883,21 @@ Standard npm and Cargo dependencies. No automated vulnerability scanning configu
 
 ### Uncertainties (Need Human Review)
 
-1. **Localhost filtering:** Is the README's localhost-only claim intentional product scope, or should `sys/` filter to `127.0.0.1` / `::1`?
-2. **Serde field naming:** Does `process_name` in TypeScript correctly receive data when Rust serializes with `camelCase` (`processName`)? Verify at runtime.
-3. **Missing icons:** Are `src-tauri/icons/` stored elsewhere, generated locally, or simply not yet committed?
-4. **SIGKILL vs graceful kill:** Is `kill -9` on Unix intentional for a dev utility, or should graceful `kill` be tried first?
+1. **SIGKILL vs graceful kill:** Is `kill -9` on Unix intentional for a dev utility, or should graceful `kill` be tried first?
+2. **LICENSE:** No license file in repo root — usage/distribution terms undefined.
 
 ### Assumptions Made in This Document
 
 - `lsof` is available on macOS/Linux target systems.
 - Windows built-in tools (`netstat`, `tasklist`, `taskkill`) are available.
+- Localhost filtering to `127.0.0.1` / `::1` / `localhost` is intentional product scope (matches README and code).
 - The GitHub repo `IT25100142/PortPurge-System` is the canonical update source.
 - App identifier `com.portpurge.app` is final.
+- `cargo test` passes on the developer's current platform; full 25-test suite requires a non-Windows build for `unix.rs` coverage.
+- App version displayed in UI is sourced from `tauri.conf.json` via Tauri `getVersion()`, not hardcoded in React.
 
 ### Recommended Future Documentation
 
 - Add `CONTRIBUTING.md` with platform-specific dev notes.
-- Add `.env.example` for `TAURI_DEV_HOST`.
-- Sync `README.md` with actual behavior (localhost filter, test description, folder name).
-- Add parser fixture documentation when unit tests are added.
+- Sync `README.md` architecture diagram with component-based frontend.
+- Add LICENSE file.
