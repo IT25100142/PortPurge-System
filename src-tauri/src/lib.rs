@@ -1,6 +1,6 @@
 mod sys;
 
-use sys::PortInfo;
+use sys::{PortInfo, ProcessDetails};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
@@ -13,6 +13,13 @@ async fn get_active_ports() -> Result<Vec<PortInfo>, String> {
 #[tauri::command]
 async fn kill_process_by_pid(pid: u32) -> Result<(), String> {
     sys::kill_process_by_pid(pid)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_process_details(pid: u32) -> Result<ProcessDetails, String> {
+    sys::get_process_details(pid)
         .await
         .map_err(|e| e.to_string())
 }
@@ -88,7 +95,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_active_ports,
-            kill_process_by_pid
+            kill_process_by_pid,
+            get_process_details
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
