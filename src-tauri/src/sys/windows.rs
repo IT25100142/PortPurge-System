@@ -1,7 +1,8 @@
 use super::{
     dedupe_and_sort_ports, host_from_addr_port, is_localhost_address, ParsedPort, PortInfo,
-    PortPurgeError, Protocol,
+    PortPurgeError, ProcessDetails, Protocol,
 };
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::os::windows::process::CommandExt;
 use std::process::Command;
@@ -131,6 +132,115 @@ pub async fn get_active_ports() -> Result<Vec<PortInfo>, PortPurgeError> {
     .map_err(|e| PortPurgeError::Unknown(e.to_string()))?
 }
 
+fn build_powershell_process_script(pid: u32) -> String {
+    format!(
+        r#"$p = Get-CimInstance Win32_Process -Filter "ProcessId={pid}"
+if ($null -eq $p) {{ exit 2 }}
+$owner = $null
+try {{
+  $o = Invoke-CimMethod -InputObject $p -MethodName GetOwner
+  if ($o.User) {{ $owner = "$($o.Domain)\$($o.User)" }}
+}} catch {{}}
+[ordered]@{{
+  pid = [int]$p.ProcessId
+  processName = $p.Name
+  executablePath = $p.ExecutablePath
+  commandLine = $p.CommandLine
+  memoryBytes = [uint64]$p.WorkingSetSize
+  user = $owner
+  startedAt = if ($p.CreationDate) {{ $p.CreationDate.ToString('o') }} else {{ $null }}
+}} | ConvertTo-Json -Compress"#
+    )
+}
+
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value.and_then(|s| {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+/// Parse JSON emitted by the PowerShell CIM process-inspection script.
+pub(crate) fn parse_windows_process_json(json: &str) -> Result<ProcessDetails, PortPurgeError> {
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct RawProcessJson {
+        pid: u32,
+        process_name: String,
+        executable_path: Option<String>,
+        command_line: Option<String>,
+        memory_bytes: Option<u64>,
+        user: Option<String>,
+        started_at: Option<String>,
+    }
+
+    let raw: RawProcessJson = serde_json::from_str(json.trim()).map_err(|e| {
+        PortPurgeError::CommandError(format!("Failed to parse process details JSON: {e}"))
+    })?;
+
+    let executable_path = normalize_optional_string(raw.executable_path);
+    let command_line = normalize_optional_string(raw.command_line);
+    let user = normalize_optional_string(raw.user);
+    let started_at = normalize_optional_string(raw.started_at);
+    let permissions_limited = executable_path.is_none() && command_line.is_none();
+
+    Ok(ProcessDetails {
+        pid: raw.pid,
+        process_name: raw.process_name,
+        executable_path,
+        command_line,
+        memory_bytes: raw.memory_bytes,
+        user,
+        started_at,
+        permissions_limited,
+    })
+}
+
+fn get_process_details_blocking(pid: u32) -> Result<ProcessDetails, PortPurgeError> {
+    let script = build_powershell_process_script(pid);
+    let mut cmd = Command::new("powershell");
+    cmd.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+    let output = cmd
+        .output()
+        .map_err(|e| PortPurgeError::CommandError(e.to_string()))?;
+
+    if output.status.code() == Some(2) {
+        return Err(PortPurgeError::ProcessNotFound);
+    }
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let error_msg = format!("{}{}", stderr, stdout);
+
+        if error_msg.to_lowercase().contains("access is denied") {
+            return Err(PortPurgeError::AccessDenied);
+        }
+
+        return Err(PortPurgeError::CommandError(error_msg));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if stdout.trim().is_empty() {
+        return Err(PortPurgeError::ProcessNotFound);
+    }
+
+    parse_windows_process_json(&stdout)
+}
+
+/// Fetches extended process details for a PID using PowerShell CIM on Windows.
+pub async fn get_process_details(pid: u32) -> Result<ProcessDetails, PortPurgeError> {
+    tauri::async_runtime::spawn_blocking(move || get_process_details_blocking(pid))
+        .await
+        .map_err(|e| PortPurgeError::Unknown(e.to_string()))?
+}
+
 /// Terminates a process on Windows using `taskkill /F /PID <pid>`.
 pub async fn kill_process_by_pid(pid: u32) -> Result<(), PortPurgeError> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -165,7 +275,38 @@ pub async fn kill_process_by_pid(pid: u32) -> Result<(), PortPurgeError> {
 #[cfg(test)]
 mod tests {
     use super::parse_netstat_line;
+    use super::parse_windows_process_json;
     use super::Protocol;
+
+    #[test]
+    fn parse_windows_process_json_full_details() {
+        let json = r#"{"pid":1234,"processName":"node.exe","executablePath":"C:\\node\\node.exe","commandLine":"node server.js","memoryBytes":52428800,"user":"DESKTOP\\user","startedAt":"2024-06-23T10:30:00.0000000+00:00"}"#;
+        let details = parse_windows_process_json(json).unwrap();
+        assert_eq!(details.pid, 1234);
+        assert_eq!(details.process_name, "node.exe");
+        assert_eq!(
+            details.executable_path.as_deref(),
+            Some(r"C:\node\node.exe")
+        );
+        assert_eq!(details.command_line.as_deref(), Some("node server.js"));
+        assert_eq!(details.memory_bytes, Some(52_428_800));
+        assert_eq!(details.user.as_deref(), Some(r"DESKTOP\user"));
+        assert!(!details.permissions_limited);
+    }
+
+    #[test]
+    fn parse_windows_process_json_sets_permissions_limited_when_sensitive_fields_missing() {
+        let json = r#"{"pid":4,"processName":"System","executablePath":null,"commandLine":null,"memoryBytes":1048576,"user":null,"startedAt":"2024-01-01T00:00:00.0000000+00:00"}"#;
+        let details = parse_windows_process_json(json).unwrap();
+        assert!(details.permissions_limited);
+        assert!(details.executable_path.is_none());
+        assert!(details.command_line.is_none());
+    }
+
+    #[test]
+    fn parse_windows_process_json_rejects_invalid_json() {
+        assert!(parse_windows_process_json("not-json").is_err());
+    }
 
     #[test]
     fn parse_netstat_line_tcp_localhost() {

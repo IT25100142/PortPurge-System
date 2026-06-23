@@ -65,6 +65,20 @@ pub struct PortInfo {
     pub process_name: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessDetails {
+    pub pid: u32,
+    pub process_name: String,
+    pub executable_path: Option<String>,
+    pub command_line: Option<String>,
+    pub memory_bytes: Option<u64>,
+    pub user: Option<String>,
+    pub started_at: Option<String>,
+    /// True when the process was found but sensitive fields are unavailable (ACL / elevation).
+    pub permissions_limited: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
 pub enum PortPurgeError {
     #[error("Access Denied. Try running with admin/sudo privileges.")]
@@ -128,18 +142,18 @@ pub(crate) fn is_localhost_address(host: &str) -> bool {
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "windows")]
-pub use windows::{get_active_ports, kill_process_by_pid};
+pub use windows::{get_active_ports, get_process_details, kill_process_by_pid};
 
 #[cfg(not(target_os = "windows"))]
 mod unix;
 #[cfg(not(target_os = "windows"))]
-pub use unix::{get_active_ports, kill_process_by_pid};
+pub use unix::{get_active_ports, get_process_details, kill_process_by_pid};
 
 #[cfg(test)]
 mod tests {
     use super::{
         dedupe_and_sort_ports, host_from_addr_port, is_localhost_address, PortInfo, PortPurgeError,
-        Protocol,
+        ProcessDetails, Protocol,
     };
 
     fn port_info(port: u16, protocol: Protocol, pid: u32, process_name: &str) -> PortInfo {
@@ -251,5 +265,25 @@ mod tests {
         let protocol = Protocol::Other("SCTP".into());
         let json = serde_json::to_value(&protocol).unwrap();
         assert_eq!(json, "SCTP");
+    }
+
+    #[test]
+    fn process_details_serializes_camel_case() {
+        let details = ProcessDetails {
+            pid: 1234,
+            process_name: "node.exe".into(),
+            executable_path: Some(r"C:\Program Files\node\node.exe".into()),
+            command_line: Some("node server.js".into()),
+            memory_bytes: Some(52_428_800),
+            user: Some(r"DESKTOP\user".into()),
+            started_at: Some("2024-06-23T10:30:00.0000000+00:00".into()),
+            permissions_limited: false,
+        };
+        let json: serde_json::Value = serde_json::to_value(&details).unwrap();
+        assert_eq!(json["processName"], "node.exe");
+        assert_eq!(json["executablePath"], r"C:\Program Files\node\node.exe");
+        assert_eq!(json["commandLine"], "node server.js");
+        assert_eq!(json["memoryBytes"], 52_428_800);
+        assert_eq!(json["permissionsLimited"], false);
     }
 }
