@@ -54,9 +54,7 @@ export function KillConfirmModal({
               <h3 id="kill-modal-title" className="text-lg font-bold text-white">
                 Terminate Process?
               </h3>
-              <p className="text-xs text-slate-400 font-medium">
-                This action cannot be undone
-              </p>
+              <p className="text-xs text-slate-400 font-medium">This action cannot be undone</p>
             </div>
           </div>
           {!isKilling && (
@@ -110,8 +108,8 @@ export function KillConfirmModal({
           <AlertTriangle className="w-4 h-4 shrink-0 text-amber-500 mt-0.5" />
           <p className="text-xs leading-relaxed">
             Terminating PID {target.pid} will immediately stop{" "}
-            <span className="font-semibold">{target.processName}</span> and free port{" "}
-            {target.port}. System or protected processes may require administrator privileges.
+            <span className="font-semibold">{target.processName}</span> and free port {target.port}.
+            System or protected processes may require administrator privileges.
           </p>
         </div>
 

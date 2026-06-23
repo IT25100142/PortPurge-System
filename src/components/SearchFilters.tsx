@@ -33,9 +33,7 @@ export function SearchFilters({
             type="button"
             onClick={() => onProtocolChange(filter)}
             className={`flex-1 sm:flex-initial px-4 py-1.5 rounded-lg text-xs font-bold tracking-wider transition duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/50 ${
-              protocolFilter === filter
-                ? "btn-primary"
-                : "text-slate-400 hover:text-white"
+              protocolFilter === filter ? "btn-primary" : "text-slate-400 hover:text-white"
             }`}
           >
             {filter}
