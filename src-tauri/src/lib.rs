@@ -1,6 +1,8 @@
+mod config;
 mod sys;
 mod tray;
 
+use config::get_protected_process_names;
 use sys::{PortInfo, ProcessDetails};
 use tauri::Manager;
 
@@ -35,7 +37,10 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .setup(|app| tray::init(app))
+        .setup(|app| {
+            config::init(app)?;
+            tray::init(app)
+        })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let _ = window.hide();
@@ -45,7 +50,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_active_ports,
             kill_process_by_pid,
-            get_process_details
+            get_process_details,
+            get_protected_process_names
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
