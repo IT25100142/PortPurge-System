@@ -1,40 +1,109 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::HashMap;
+
+/// Network protocol for a bound port. Serializes as `"TCP"` / `"UDP"` or the raw OS string for unknown values.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Protocol {
+    Tcp,
+    Udp,
+    Other(String),
+}
+
+impl Protocol {
+    pub(crate) fn parse_known(s: &str) -> Option<Self> {
+        match s {
+            "TCP" => Some(Self::Tcp),
+            "UDP" => Some(Self::Udp),
+            _ => None,
+        }
+    }
+
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Tcp => "TCP",
+            Self::Udp => "UDP",
+            Self::Other(s) => s.as_str(),
+        }
+    }
+}
+
+impl std::fmt::Display for Protocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Serialize for Protocol {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for Protocol {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(match s.as_str() {
+            "TCP" => Self::Tcp,
+            "UDP" => Self::Udp,
+            other => Self::Other(other.to_string()),
+        })
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PortInfo {
     pub port: u16,
-    pub protocol: String, // "TCP" or "UDP"
+    pub protocol: Protocol,
     pub pid: u32,
     pub process_name: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
 pub enum PortPurgeError {
+    #[error("Access Denied. Try running with admin/sudo privileges.")]
     AccessDenied,
+    #[error("Process not found (it may have already exited).")]
     ProcessNotFound,
+    #[error("Command error: {0}")]
     CommandError(String),
+    #[error("Unknown error: {0}")]
     Unknown(String),
 }
 
-impl std::fmt::Display for PortPurgeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::AccessDenied => write!(f, "Access Denied. Try running with admin/sudo privileges."),
-            Self::ProcessNotFound => write!(f, "Process not found (it may have already exited)."),
-            Self::CommandError(err) => write!(f, "Command error: {}", err),
-            Self::Unknown(err) => write!(f, "Unknown error: {}", err),
-        }
+/// Deduplicate by `(port, protocol)`, preferring a known process name over `"Unknown"`, then sort by port.
+pub(crate) fn dedupe_and_sort_ports(ports: Vec<PortInfo>) -> Vec<PortInfo> {
+    let mut unique_ports = HashMap::new();
+    for p in ports {
+        let key = (p.port, p.protocol.clone());
+        unique_ports
+            .entry(key)
+            .and_modify(|existing: &mut PortInfo| {
+                if (existing.process_name == "Unknown" || existing.process_name.is_empty())
+                    && p.process_name != "Unknown"
+                {
+                    *existing = p.clone();
+                }
+            })
+            .or_insert(p);
     }
-}
 
-impl std::error::Error for PortPurgeError {}
+    let mut result: Vec<PortInfo> = unique_ports.into_values().collect();
+    result.sort_by_key(|p| p.port);
+    result
+}
 
 /// Partial port entry from a netstat line (process name resolved separately on Windows).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedPort {
     pub port: u16,
-    pub protocol: String,
+    pub protocol: Protocol,
     pub pid: u32,
 }
 
@@ -51,8 +120,8 @@ pub(crate) fn host_from_addr_port(addr_port: &str) -> Option<&str> {
 
 /// True when the bind address is loopback-only.
 pub(crate) fn is_localhost_address(host: &str) -> bool {
-    let h = host.trim_matches(['[', ']']).to_ascii_lowercase();
-    h == "127.0.0.1" || h == "::1" || h == "localhost"
+    let h = host.trim_matches(['[', ']']);
+    h == "::1" || h.eq_ignore_ascii_case("127.0.0.1") || h.eq_ignore_ascii_case("localhost")
 }
 
 // Platform-specific conditional compilation
@@ -68,7 +137,75 @@ pub use unix::{get_active_ports, kill_process_by_pid};
 
 #[cfg(test)]
 mod tests {
-    use super::{host_from_addr_port, is_localhost_address, PortInfo};
+    use super::{
+        dedupe_and_sort_ports, host_from_addr_port, is_localhost_address, PortInfo, PortPurgeError,
+        Protocol,
+    };
+
+    fn port_info(port: u16, protocol: Protocol, pid: u32, process_name: &str) -> PortInfo {
+        PortInfo {
+            port,
+            protocol,
+            pid,
+            process_name: process_name.into(),
+        }
+    }
+
+    #[test]
+    fn dedupe_and_sort_ports_prefers_known_name_over_unknown() {
+        let ports = vec![
+            port_info(3000, Protocol::Tcp, 1, "Unknown"),
+            port_info(3000, Protocol::Tcp, 1, "node"),
+        ];
+        let result = dedupe_and_sort_ports(ports);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].process_name, "node");
+    }
+
+    #[test]
+    fn dedupe_and_sort_ports_prefers_known_name_over_empty() {
+        let ports = vec![
+            port_info(8080, Protocol::Udp, 2, ""),
+            port_info(8080, Protocol::Udp, 2, "nginx"),
+        ];
+        let result = dedupe_and_sort_ports(ports);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].process_name, "nginx");
+    }
+
+    #[test]
+    fn dedupe_and_sort_ports_sorts_by_port_ascending() {
+        let ports = vec![
+            port_info(9000, Protocol::Tcp, 3, "a"),
+            port_info(3000, Protocol::Tcp, 1, "b"),
+            port_info(5173, Protocol::Udp, 2, "c"),
+        ];
+        let result = dedupe_and_sort_ports(ports);
+        assert_eq!(
+            result.iter().map(|p| p.port).collect::<Vec<_>>(),
+            vec![3000, 5173, 9000]
+        );
+    }
+
+    #[test]
+    fn port_purge_error_display_strings_match_ipc_contract() {
+        assert_eq!(
+            PortPurgeError::AccessDenied.to_string(),
+            "Access Denied. Try running with admin/sudo privileges."
+        );
+        assert_eq!(
+            PortPurgeError::ProcessNotFound.to_string(),
+            "Process not found (it may have already exited)."
+        );
+        assert_eq!(
+            PortPurgeError::CommandError("spawn failed".into()).to_string(),
+            "Command error: spawn failed"
+        );
+        assert_eq!(
+            PortPurgeError::Unknown("unexpected".into()).to_string(),
+            "Unknown error: unexpected"
+        );
+    }
 
     #[test]
     fn is_localhost_address_accepts_loopback_hosts() {
@@ -98,7 +235,7 @@ mod tests {
     fn port_info_serializes_camel_case() {
         let info = PortInfo {
             port: 3000,
-            protocol: "TCP".into(),
+            protocol: Protocol::Tcp,
             pid: 1,
             process_name: "node".into(),
         };
@@ -107,5 +244,12 @@ mod tests {
         assert_eq!(json["port"], 3000);
         assert_eq!(json["protocol"], "TCP");
         assert_eq!(json["pid"], 1);
+    }
+
+    #[test]
+    fn protocol_serializes_other_as_raw_os_string() {
+        let protocol = Protocol::Other("SCTP".into());
+        let json = serde_json::to_value(&protocol).unwrap();
+        assert_eq!(json, "SCTP");
     }
 }

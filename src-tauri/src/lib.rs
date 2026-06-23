@@ -1,9 +1,9 @@
 mod sys;
 
 use sys::PortInfo;
-use tauri::Manager;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+use tauri::Manager;
 
 #[tauri::command]
 async fn get_active_ports() -> Result<Vec<PortInfo>, String> {
@@ -12,7 +12,9 @@ async fn get_active_ports() -> Result<Vec<PortInfo>, String> {
 
 #[tauri::command]
 async fn kill_process_by_pid(pid: u32) -> Result<(), String> {
-    sys::kill_process_by_pid(pid).await.map_err(|e| e.to_string())
+    sys::kill_process_by_pid(pid)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -34,33 +36,35 @@ pub fn run() {
             let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
 
             // Retrieve default window icon
-            let icon = app.default_window_icon().cloned().expect("failed to get default window icon");
-            
+            let icon = app
+                .default_window_icon()
+                .cloned()
+                .expect("failed to get default window icon");
+
             // Build the System Tray
             let _tray = TrayIconBuilder::new()
                 .icon(icon)
                 .menu(&menu)
                 .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| {
-                    match event.id.as_ref() {
-                        "quit" => {
-                            app.exit(0);
-                        }
-                        "show" => {
-                            if let Some(w) = app.get_webview_window("main") {
-                                let _ = w.show();
-                                let _ = w.set_focus();
-                            }
-                        }
-                        _ => {}
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "quit" => {
+                        app.exit(0);
                     }
+                    "show" => {
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                    _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click {
                         button: tauri::tray::MouseButton::Left,
                         button_state: tauri::tray::MouseButtonState::Up,
                         ..
-                    } = event {
+                    } = event
+                    {
                         let app = tray.app_handle();
                         if let Some(w) = app.get_webview_window("main") {
                             if w.is_visible().unwrap_or(false) {
@@ -102,7 +106,10 @@ mod tests {
             let ports = ports.unwrap();
             println!("\nFound {} active ports:", ports.len());
             for port in &ports[..std::cmp::min(15, ports.len())] {
-                println!("  Port: {}, Protocol: {}, PID: {}, Process: {}", port.port, port.protocol, port.pid, port.process_name);
+                println!(
+                    "  Port: {}, Protocol: {}, PID: {}, Process: {}",
+                    port.port, port.protocol, port.pid, port.process_name
+                );
             }
         });
     }
