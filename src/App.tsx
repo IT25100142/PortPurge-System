@@ -8,6 +8,7 @@ import { PortTable } from "./components/PortTable";
 import { ToastContainer } from "./components/ToastContainer";
 import { UpdateModal } from "./components/UpdateModal";
 import { KillConfirmModal } from "./components/KillConfirmModal";
+import { ProcessDetailsModal } from "./components/ProcessDetailsModal";
 import { MetricsBar } from "./components/MetricsBar";
 import { SearchFilters } from "./components/SearchFilters";
 import type { PortInfo, Toast } from "./types";
@@ -27,7 +28,10 @@ function App() {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const [killTarget, setKillTarget] = useState<PortInfo | null>(null);
+  const [inspectTarget, setInspectTarget] = useState<PortInfo | null>(null);
   const [killingPid, setKillingPid] = useState<number | null>(null);
+
+  const closeInspectModal = useCallback(() => setInspectTarget(null), []);
 
   const [updateAvailable, setUpdateAvailable] = useState<Update | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -310,6 +314,7 @@ function App() {
           isRefreshing={isRefreshing}
           killingPid={killingPid}
           onRequestKill={setKillTarget}
+          onRequestInspect={setInspectTarget}
           onClearFilters={() => {
             setSearchQuery("");
             setProtocolFilter("ALL");
@@ -326,6 +331,12 @@ function App() {
           }
         }}
         onCancel={() => setKillTarget(null)}
+      />
+
+      <ProcessDetailsModal
+        target={inspectTarget}
+        onClose={closeInspectModal}
+        onRequestKill={setKillTarget}
       />
 
       {updateAvailable && (
