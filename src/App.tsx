@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { check, Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -30,11 +31,15 @@ function App() {
 
   const [updateAvailable, setUpdateAvailable] = useState<Update | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
-  const [downloadProgress, setDownloadProgress] = useState<{ downloaded: number; total: number | null }>({
+  const [downloadProgress, setDownloadProgress] = useState<{
+    downloaded: number;
+    total: number | null;
+  }>({
     downloaded: 0,
     total: null,
   });
   const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
 
   const toastTimeoutRefs = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
@@ -62,25 +67,36 @@ function App() {
     [removeToast],
   );
 
-  const fetchPorts = useCallback(async (showNotification = false) => {
-    setIsRefreshing(true);
-    try {
-      const activePorts = await invoke<PortInfo[]>("get_active_ports");
-      setPorts(activePorts);
-      setLastRefreshedAt(new Date());
-      if (showNotification) {
-        showToast(`Retrieved ${activePorts.length} active ports`, "success");
+  const fetchPorts = useCallback(
+    async (showNotification = false) => {
+      setIsRefreshing(true);
+      try {
+        const activePorts = await invoke<PortInfo[]>("get_active_ports");
+        setPorts(activePorts);
+        setLastRefreshedAt(new Date());
+        if (showNotification) {
+          showToast(`Retrieved ${activePorts.length} active ports`, "success");
+        }
+      } catch (err) {
+        showToast(String(err), "error");
+      } finally {
+        setIsRefreshing(false);
       }
-    } catch (err) {
-      showToast(String(err), "error");
-    } finally {
-      setIsRefreshing(false);
-    }
-  }, [showToast]);
+    },
+    [showToast],
+  );
 
   useEffect(() => {
     fetchPorts();
   }, [fetchPorts]);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+
+    getVersion()
+      .then((version) => setAppVersion(version))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!autoRefresh) return;
@@ -193,8 +209,7 @@ function App() {
       p.port.toString().includes(searchQuery) ||
       p.pid.toString().includes(searchQuery);
 
-    const matchesProtocol =
-      protocolFilter === "ALL" || p.protocol.toUpperCase() === protocolFilter;
+    const matchesProtocol = protocolFilter === "ALL" || p.protocol.toUpperCase() === protocolFilter;
 
     return matchesSearch && matchesProtocol;
   });
@@ -224,11 +239,15 @@ function App() {
                 <h1 className="text-2xl font-bold tracking-tight bg-gradient-to-r from-white via-slate-100 to-indigo-300 bg-clip-text text-transparent">
                   PortPurge
                 </h1>
-                <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-slate-950/60 border border-slate-800/80 text-slate-400 select-none">
-                  v0.1.0
-                </span>
+                {appVersion !== null && (
+                  <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-slate-950/60 border border-slate-800/80 text-slate-400 select-none">
+                    v{appVersion}
+                  </span>
+                )}
               </div>
-              <p className="text-xs text-slate-400 font-medium">Localhost Port Management & Process Purger</p>
+              <p className="text-xs text-slate-400 font-medium">
+                Localhost Port Management & Process Purger
+              </p>
             </div>
           </div>
 
@@ -312,6 +331,7 @@ function App() {
       {updateAvailable && (
         <UpdateModal
           update={updateAvailable}
+          currentVersion={appVersion}
           show={showUpdateModal}
           isDownloading={isDownloading}
           downloadProgress={downloadProgress}
