@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { check, Update } from "@tauri-apps/plugin-updater";
@@ -8,10 +8,13 @@ import { PortTable } from "./components/PortTable";
 import { ToastContainer } from "./components/ToastContainer";
 import { UpdateModal } from "./components/UpdateModal";
 import { KillConfirmModal } from "./components/KillConfirmModal";
+import { KillGroupConfirmModal } from "./components/KillGroupConfirmModal";
 import { ProcessDetailsModal } from "./components/ProcessDetailsModal";
 import { MetricsBar } from "./components/MetricsBar";
 import { SearchFilters } from "./components/SearchFilters";
-import type { PortInfo, Toast } from "./types";
+import type { PortGroup, PortInfo, Toast } from "./types";
+import { filterPortsByFuzzyQuery } from "./utils/fuzzySearch";
+import { groupByProcessName } from "./utils/groupPorts";
 
 function formatLastRefreshed(date: Date | null): string {
   if (!date) return "—";
@@ -22,14 +25,17 @@ function App() {
   const [ports, setPorts] = useState<PortInfo[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [protocolFilter, setProtocolFilter] = useState<"ALL" | "TCP" | "UDP">("ALL");
+  const [groupByProcess, setGroupByProcess] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const [killTarget, setKillTarget] = useState<PortInfo | null>(null);
+  const [killGroupTarget, setKillGroupTarget] = useState<PortGroup | null>(null);
   const [inspectTarget, setInspectTarget] = useState<PortInfo | null>(null);
   const [killingPid, setKillingPid] = useState<number | null>(null);
+  const [isKillingGroup, setIsKillingGroup] = useState(false);
 
   const closeInspectModal = useCallback(() => setInspectTarget(null), []);
 
@@ -105,12 +111,12 @@ function App() {
   useEffect(() => {
     if (!autoRefresh) return;
     const timer = setInterval(() => {
-      if (killingPid === null) {
+      if (killingPid === null && !isKillingGroup) {
         fetchPorts();
       }
     }, 3000);
     return () => clearInterval(timer);
-  }, [autoRefresh, fetchPorts, killingPid]);
+  }, [autoRefresh, fetchPorts, killingPid, isKillingGroup]);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -166,6 +172,63 @@ function App() {
     }
   };
 
+  const killProcessGroup = async (group: PortGroup) => {
+    setKillGroupTarget(null);
+    setIsKillingGroup(true);
+
+    const previousPorts = [...ports];
+    const pids = [...group.uniquePids];
+    const processLabel = group.processName?.trim() || "Unknown";
+
+    setPorts((prev) => prev.filter((port) => !pids.includes(port.pid)));
+
+    let successCount = 0;
+    const failures: string[] = [];
+    let permissionDenied = false;
+
+    for (const pid of pids) {
+      setKillingPid(pid);
+      try {
+        await invoke("kill_process_by_pid", { pid });
+        successCount++;
+      } catch (err) {
+        const errMsg = String(err);
+        failures.push(`PID ${pid}`);
+        if (errMsg.includes("Access Denied")) {
+          permissionDenied = true;
+        }
+      }
+    }
+
+    setKillingPid(null);
+    setIsKillingGroup(false);
+
+    if (successCount === pids.length) {
+      showToast(
+        `Terminated ${successCount} process${successCount === 1 ? "" : "es"} (${processLabel}).`,
+        "success",
+      );
+    } else if (successCount === 0) {
+      setPorts(previousPorts);
+      if (permissionDenied) {
+        showToast(
+          `Permission Denied: Run as administrator/sudo to terminate processes in ${processLabel}.`,
+          "error",
+          { permissionDenied: true },
+        );
+      } else {
+        showToast(`Failed to terminate processes in ${processLabel}.`, "error");
+      }
+    } else {
+      showToast(
+        `Terminated ${successCount} of ${pids.length} processes in ${processLabel}. Failed: ${failures.join(", ")}.`,
+        "warning",
+      );
+    }
+
+    fetchPorts();
+  };
+
   const startUpdate = async () => {
     if (!updateAvailable) return;
     setIsDownloading(true);
@@ -207,16 +270,19 @@ function App() {
     }
   };
 
-  const filteredPorts = ports.filter((p) => {
-    const matchesSearch =
-      p.processName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      p.port.toString().includes(searchQuery) ||
-      p.pid.toString().includes(searchQuery);
+  const filteredPorts = useMemo(() => {
+    const searchFiltered = filterPortsByFuzzyQuery(ports, searchQuery);
+    return searchFiltered.filter(
+      (port) => protocolFilter === "ALL" || port.protocol.toUpperCase() === protocolFilter,
+    );
+  }, [ports, searchQuery, protocolFilter]);
 
-    const matchesProtocol = protocolFilter === "ALL" || p.protocol.toUpperCase() === protocolFilter;
-
-    return matchesSearch && matchesProtocol;
-  });
+  const displayGroups = useMemo((): PortGroup[] | null => {
+    if (!groupByProcess) {
+      return null;
+    }
+    return groupByProcessName(filteredPorts);
+  }, [filteredPorts, groupByProcess]);
 
   const tcpCount = ports.filter((p) => p.protocol.toUpperCase() === "TCP").length;
   const udpCount = ports.filter((p) => p.protocol.toUpperCase() === "UDP").length;
@@ -302,18 +368,23 @@ function App() {
         <SearchFilters
           searchQuery={searchQuery}
           protocolFilter={protocolFilter}
+          groupByProcess={groupByProcess}
           onSearchChange={setSearchQuery}
           onProtocolChange={setProtocolFilter}
+          onToggleGroupByProcess={() => setGroupByProcess((prev) => !prev)}
         />
 
         <PortTable
           filteredPorts={filteredPorts}
+          displayGroups={displayGroups}
+          groupByProcess={groupByProcess}
           totalPortCount={ports.length}
           searchQuery={searchQuery}
           protocolFilter={protocolFilter}
           isRefreshing={isRefreshing}
           killingPid={killingPid}
           onRequestKill={setKillTarget}
+          onRequestKillGroup={setKillGroupTarget}
           onRequestInspect={setInspectTarget}
           onClearFilters={() => {
             setSearchQuery("");
@@ -331,6 +402,17 @@ function App() {
           }
         }}
         onCancel={() => setKillTarget(null)}
+      />
+
+      <KillGroupConfirmModal
+        target={killGroupTarget}
+        isKilling={isKillingGroup}
+        onConfirm={() => {
+          if (killGroupTarget) {
+            killProcessGroup(killGroupTarget);
+          }
+        }}
+        onCancel={() => setKillGroupTarget(null)}
       />
 
       <ProcessDetailsModal

@@ -5,6 +5,28 @@ export interface PortInfo {
   processName: string;
 }
 
+/** Normalized key for expand/collapse persistence (lowercase trimmed processName). */
+export type PortGroupKey = string;
+
+export interface PortGroup {
+  groupKey: PortGroupKey;
+  processName: string;
+  ports: PortInfo[];
+  portCount: number;
+  pidCount: number;
+  uniquePids: number[];
+}
+
+export type TableViewMode = "flat" | "grouped";
+
+export type SortLevel = "group" | "child";
+
+export interface TableSortConfig {
+  level: SortLevel;
+  key: keyof PortInfo;
+  direction: "asc" | "desc";
+}
+
 export interface ProcessDetails {
   pid: number;
   processName: string;
