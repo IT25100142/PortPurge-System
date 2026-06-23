@@ -6,8 +6,8 @@
 
 - **Why it exists:** Developers frequently encounter "port already in use" errors during local development. PortPurge provides a fast visual dashboard instead of manually running `netstat`, `lsof`, or `taskkill`.
 - **Target users:** Software developers debugging local port conflicts on Windows, macOS, or Linux.
-- **Current maturity:** Early-stage **v0.1.0** in manifests (`package.json`, `Cargo.toml`, `tauri.conf.json`); README documents **v0.2.0** feature set (sorting, deep inspection). Functional core plus expanded Rust test suite, component-driven UI with orchestration in `App.tsx`.
-- **Recent capabilities:** Client-side column sorting (flat + grouped views), fuzzy search, process-name grouping with expandable rows and batch group kill, deep process inspection modal (`get_process_details` IPC), kill-from-inspect flow, dynamic system tray with quick-kill menu slots and port-count icon states.
+- **Current maturity:** **v0.5.0** in manifests (`package.json`, `Cargo.toml`, `tauri.conf.json`). Functional core with component-driven UI orchestrated in `App.tsx`, system tray quick-kill, Purge Ledger audit trail, and **Smart Protect** (config-backed process denylist).
+- **Recent capabilities:** Client-side column sorting (flat + grouped views), fuzzy search, process-name grouping with batch group kill, deep process inspection modal (`get_process_details` IPC), kill-from-inspect flow, dynamic system tray with quick-kill menu slots and port-count icon states, **Purge Ledger** (persistent JSON kill history, `ledger-updated` event stream, History drawer UI), **Smart Protect** (`config.json` denylist, UI shield/disabled kill guardrails, backend `ProtectedProcess` enforcement in `kill_and_record`).
 - **Project type:** Tauri v2 desktop application (native shell + webview UI). **Not** a web server, SPA deployment, or mobile app.
 - **Core domain purpose:** Local port monitoring and process termination via OS-level shell commands.
 
@@ -29,15 +29,16 @@ Identified in: `README.md`, `package.json`, `src/App.tsx`, `src-tauri/Cargo.toml
 | **Serde / serde_json** | v1 | `src-tauri/Cargo.toml` — IPC serialization |
 | **thiserror** | v2 | `src-tauri/Cargo.toml` — `PortPurgeError` derive |
 | **Tauri plugins** | opener, single-instance, updater, process | `src-tauri/src/lib.rs`, `src-tauri/capabilities/default.json` |
-| **IPC client** | `@tauri-apps/api` `invoke()`, `getVersion()`; commands: `get_active_ports`, `get_process_details`, `kill_process_by_pid` | `src/App.tsx`, `src/components/ProcessDetailsModal.tsx` |
+| **IPC client** | `@tauri-apps/api` `invoke()`, `listen()`, `getVersion()`; commands: `get_active_ports`, `get_process_details`, `kill_process_by_pid`, `get_ledger_entries`, `clear_ledger_entries`, `get_protected_process_names`; event: `ledger-updated` | `src/App.tsx`, `src/components/ProcessDetailsModal.tsx`, `src/components/LedgerDrawer.tsx` |
 | **Package manager** | npm | `package-lock.json`, `package.json` scripts |
 | **Database** | None | — |
+| **Persistence** | Smart Protect `config.json` + Purge Ledger `purge-ledger.json` (both in app data dir; ledger max 100 entries) | `src-tauri/src/config/mod.rs`, `src-tauri/src/ledger/mod.rs` |
 | **ORM** | None | — |
 | **Auth** | None (OS-level permissions only) | — |
 | **HTTP API** | None | — |
 | **State management** | React `useState` / `useCallback` / `useEffect` only | `src/App.tsx` |
 | **Validation** | TypeScript types + Rust `u32` for PID | `src/App.tsx`, `src-tauri/src/sys/mod.rs` |
-| **Testing** | Rust `#[test]` — **27 on Windows** / **38 on Unix** (platform `#[cfg]` gates `unix.rs` tests; includes 5 `tray` tests) | `src-tauri/src/**/*.rs` |
+| **Testing** | Rust `#[test]` — **32 on Windows** / **43 on Unix** (platform `#[cfg]` gates `unix.rs` tests; includes 5 `tray` + 5 `config` tests) | `src-tauri/src/**/*.rs` |
 | **Linting** | ESLint 9 + typescript-eslint + Prettier (frontend); `cargo clippy` + `cargo fmt` (backend via npm scripts) | `eslint.config.js`, `.prettierrc`, `package.json` |
 | **CI/CD** | GitHub Actions + `tauri-apps/tauri-action`; `cargo test` before build (no `npm run lint` in CI) | `.github/workflows/release.yml` |
 | **Deployment** | Desktop installers via `tauri build`; auto-updater via GitHub Releases | `tauri.conf.json`, `release.yml` |
@@ -68,12 +69,14 @@ PortPurge-System/
 │       └── permission-denied.webp
 ├── src/                         # React frontend (webview UI)
 │   ├── main.tsx                 # React entry point
-│   ├── App.tsx                  # App shell, state, IPC, inspect/kill/group-kill/updater orchestration (~442 lines)
+│   ├── App.tsx                  # App shell, state, IPC, inspect/kill/group-kill/updater orchestration (~441 lines)
 │   ├── types.ts                 # Shared TS interfaces (PortInfo, PortGroup, ProcessDetails, Toast, etc.)
 │   ├── utils/                   # Pure frontend helpers (no React)
 │   │   ├── fuzzySearch.ts       # Ordered-subsequence fuzzy port search
 │   │   ├── groupPorts.ts        # groupByProcessName → PortGroup[]
-│   │   └── sortPorts.ts         # Flat + grouped table sorting
+│   │   ├── sortPorts.ts         # Flat + grouped table sorting
+│   │   ├── formatLedger.ts      # Ledger relative time + kill-source labels
+│   │   └── isProcessProtected.ts # Smart Protect name normalization + denylist check
 │   ├── components/              # Presentational UI components
 │   │   ├── PortTable.tsx        # Sortable table shell; flat vs grouped view
 │   │   ├── PortTableRow.tsx     # Single port row (flat view)
@@ -83,6 +86,7 @@ PortPurge-System/
 │   │   ├── ProcessDetailsModal.tsx # Deep process inspection modal
 │   │   ├── KillConfirmModal.tsx # Single-port kill confirmation
 │   │   ├── KillGroupConfirmModal.tsx # Batch kill all PIDs in a process group
+│   │   ├── LedgerDrawer.tsx     # Purge Ledger History slide-over panel
 │   │   ├── UpdateModal.tsx      # In-app updater modal
 │   │   ├── ToastContainer.tsx   # Toast notifications
 │   │   └── EmptyState.tsx       # No-ports / no-results / permission states
@@ -92,6 +96,10 @@ PortPurge-System/
 │   ├── src/
 │   │   ├── main.rs              # Binary entry → portpurge_lib::run()
 │   │   ├── lib.rs               # Tauri builder, IPC commands, plugins, window events
+│   │   ├── config/
+│   │   │   └── mod.rs           # Smart Protect config.json, normalize_process_name, is_protected
+│   │   ├── ledger/
+│   │   │   └── mod.rs           # Purge Ledger JSON persistence, kill_and_record, ledger-updated emit
 │   │   ├── tray/
 │   │   │   └── mod.rs           # System tray icon, menu, port poll, quick-kill slots
 │   │   └── sys/
@@ -146,9 +154,9 @@ PortPurge-System/
 ### 4.3 Process Kill (Purge)
 
 - **Purpose:** Terminate a process owning a port (single row) or all unique PIDs in a process group.
-- **User behavior:** Click Kill → `KillConfirmModal` → Confirm → row disappears optimistically; rollback + error toast on failure. In grouped view, **Kill Group** → `KillGroupConfirmModal` → sequential `kill_process_by_pid` per unique PID.
-- **Flow:** `invoke("kill_process_by_pid", { pid })` → `sys::kill_process_by_pid()` via `spawn_blocking` → `taskkill` (Windows) or `kill -9` (Unix). Group kill loops PIDs in `App.tsx` `killProcessGroup()`.
-- **Important files:** `src/App.tsx` (`killProcess`, `killProcessGroup`, `killTarget`, `killGroupTarget`), `src/components/KillConfirmModal.tsx`, `src/components/KillGroupConfirmModal.tsx`, `src-tauri/src/sys/windows.rs`, `src-tauri/src/sys/unix.rs`.
+- **User behavior:** Click Kill → `KillConfirmModal` → Confirm → row disappears optimistically; rollback + error toast on failure. In grouped view, **Kill Group** → `KillGroupConfirmModal` → sequential `kill_process_by_pid` per unique PID with `source: group`.
+- **Flow:** `invoke("kill_process_by_pid", { pid, port, protocol, processName, source })` → `lib.rs` → `ledger::kill_and_record()` → `sys::kill_process_by_pid()` via `spawn_blocking` → append ledger entry → emit `ledger-updated`. Group kill loops PIDs in `App.tsx` `killProcessGroup()`.
+- **Important files:** `src/App.tsx` (`killProcess`, `killProcessGroup`, `killTarget`, `killGroupTarget`), `src/components/KillConfirmModal.tsx`, `src/components/KillGroupConfirmModal.tsx`, `src-tauri/src/ledger/mod.rs`, `src-tauri/src/sys/windows.rs`, `src-tauri/src/sys/unix.rs`.
 
 ### 4.4 Toast Notifications
 
@@ -174,7 +182,7 @@ PortPurge-System/
 - **Purpose:** Run quietly in background; prevent duplicate instances; quick-kill recent ports from tray menu; visual port-load indicator on tray icon.
 - **User behavior:** Close button hides to tray; left-click tray toggles window show/hide; right-click menu shows up to **5 kill slots** for the most recently seen localhost ports, then Show / Quit. Second launch focuses existing window.
 - **Tray icon states** (by active localhost port count): normal (&lt;10), amber (10–19), red (≥20). Icons: `src-tauri/icons/tray-normal.png`, `tray-amber.png`, `tray-red.png`.
-- **Tray kill:** Menu items call `sys::kill_process_by_pid` directly — **no** `KillConfirmModal` (errors logged via `eprintln!`, not React toasts).
+- **Tray kill:** Menu items call `ledger::kill_and_record` with `KillSource::Tray` — **no** `KillConfirmModal` (errors logged via `eprintln!`, not React toasts); entry still appears in History drawer via `ledger-updated`.
 - **Independent polling:** `tray/mod.rs` runs its own 3-second poll loop calling `sys::get_active_ports()` in parallel with React polling in `App.tsx`.
 - **Flow:** `lib.rs` → `tray::init()` in setup; window close/minimize-to-tray in `lib.rs` `on_window_event`; single-instance focus in plugin callback.
 - **Important files:** `src-tauri/src/tray/mod.rs`, `src-tauri/src/lib.rs`.
@@ -203,6 +211,26 @@ PortPurge-System/
 - **Group identity:** `PortGroup.groupKey` = lowercase trimmed `processName`; empty names normalize to `"Unknown"`.
 - **Important files:** `src/utils/groupPorts.ts`, `src/components/PortGroupRow.tsx`, `src/components/KillGroupConfirmModal.tsx`, `src/types.ts` (`PortGroup`).
 
+### 4.11 Purge Ledger (Action History)
+
+- **Purpose:** Persistent audit trail of the last 100 process termination attempts (success and failure) from UI, tray, and group kills.
+- **User behavior:** Click **History** in the header → `LedgerDrawer` slides in from the right; entries show process name, PID, port, protocol, source, relative time, and success/failure. **Clear History** wipes the ledger on disk.
+- **Storage:** `app_data_dir()/purge-ledger.json` — atomic write via `.tmp` + rename; corrupt file recovery starts empty.
+- **Kill centralization:** All kills route through `ledger::kill_and_record(app, KillContext)` — `sys::kill_process_by_pid` is only called inside ledger.
+- **Live updates:** After each kill, backend `app.emit("ledger-updated", &entry)`; `App.tsx` listens and prepends to `ledgerEntries` (max 100).
+- **Hydration:** `invoke("get_ledger_entries")` on mount loads persisted history.
+- **Important files:** `src-tauri/src/ledger/mod.rs`, `src/App.tsx`, `src/components/LedgerDrawer.tsx`, `src/utils/formatLedger.ts`, `src/types.ts` (`LedgerEntry`, `KillSource`).
+
+### 4.12 Smart Protect (Safe Mode) — v0.5.0
+
+- **Purpose:** Prevent accidental termination of OS-critical processes via a user-editable denylist of process names.
+- **User behavior:** Protected processes appear with Shield badge, `opacity-60`, and disabled Kill buttons (Inspect remains enabled). Batch group kill skips protected PIDs and reports skip count in toasts. Tray quick-kill slots are disabled for protected ports.
+- **Config file:** `{app_data_dir}/config.json` — schema `{ "protectedProcessNames": ["svchost.exe", ...] }`. Seeded on first launch with OS-critical defaults (no Docker). Atomic write via `.json.tmp` + rename.
+- **Name matching:** `normalize_process_name` — trim, lowercase, strip `.exe`; empty and `unknown` never match. Implemented in `config/mod.rs` (Rust) and `src/utils/isProcessProtected.ts` (TypeScript).
+- **Backend gate:** `ledger::kill_and_record` calls `ConfigState::is_protected` **before** `sys::kill_process_by_pid`. Returns `PortPurgeError::ProtectedProcess`, logs `LedgerEntry` with `success: false`, emits `ledger-updated`.
+- **Frontend hydrate:** `invoke("get_protected_process_names")` on mount → `protectedProcessNames` state in `App.tsx` → passed to `PortTable`, `PortTableRow`, `PortGroupRow`, `ProcessDetailsModal`.
+- **Important files:** `src-tauri/src/config/mod.rs`, `src-tauri/src/ledger/mod.rs`, `src/utils/isProcessProtected.ts`, `src/App.tsx`, `src/components/PortTableRow.tsx`, `src/components/PortGroupRow.tsx`, `src/components/ProcessDetailsModal.tsx`, `src-tauri/src/tray/mod.rs`.
+
 ---
 
 ## 5. Application Flow
@@ -212,10 +240,13 @@ PortPurge-System/
 ```
 main.rs → lib.rs::run()
   → Register plugins (opener, single-instance, updater, process)
-  → setup(): tray::init() — tray icon, menu, poll loop
+  → ledger::init() then config::init() then tray::init() — ledger + Smart Protect config + tray icon, menu, poll loop
   → Load webview (dev: http://localhost:1420, prod: ../dist)
   → main.tsx → App.tsx mounts
   → fetchPorts() on mount
+  → get_ledger_entries() → setLedgerEntries (Tauri only)
+  → get_protected_process_names() → setProtectedProcessNames (Tauri only)
+  → listen("ledger-updated") for live ledger updates (Tauri only)
   → getVersion() → setAppVersion (Tauri only)
   → checkForUpdates() after 1.5s delay
 ```
@@ -237,7 +268,9 @@ App.tsx useEffect (3s interval, if autoRefresh && !killingPid && !isKillingGroup
 User clicks Kill → setKillTarget(portInfo)
 User clicks Confirm → killProcess(pid, port)
   → Optimistic: remove all rows matching pid from ports state
-  → invoke("kill_process_by_pid", { pid })
+  → invoke("kill_process_by_pid", { pid, port, protocol, processName, source: "ui" })
+  → lib.rs → ledger::kill_and_record → ConfigState::is_protected check → sys::kill_process_by_pid (if allowed)
+  → append LedgerEntry + emit ledger-updated
   → On success: success toast
   → On error: rollback ports state, error toast (Access Denied message if applicable)
   → finally: fetchPorts() to resync
@@ -250,7 +283,8 @@ User enables Group by Process → clicks Kill Group on PortGroupRow
   → setKillGroupTarget(PortGroup)
 User confirms in KillGroupConfirmModal → killProcessGroup(group)
   → Optimistic: remove all rows whose pid is in group.uniquePids
-  → For each pid in group.uniquePids: invoke("kill_process_by_pid", { pid }) sequentially
+  → For each pid in group.uniquePids: invoke("kill_process_by_pid", { ..., source: "group" }) sequentially
+  → Each call routes through ledger::kill_and_record + ledger-updated emit
   → On full success: success toast
   → On partial success: warning toast with failed PIDs; rows not fully rolled back
   → On total failure: rollback ports state; error toast (Access Denied if applicable)
@@ -278,17 +312,27 @@ tray::init() → spawn_poll_loop (every 3s)
   → Populate up to 5 kill menu slots (most recently seen ports)
 
 User right-clicks tray → selects "Kill :PORT — …"
-  → handle_tray_kill(slot_index) → sys::kill_process_by_pid(pid)
-  → No React modal; errors → eprintln!
+  → handle_tray_kill(slot_index) → ledger::kill_and_record(KillSource::Tray)
+  → emit ledger-updated; errors → eprintln!
 ```
 
-### 5.7 Error Handling
+### 5.7 Ledger History Flow
+
+```
+App mount → invoke("get_ledger_entries") → setLedgerEntries
+User opens History → LedgerDrawer renders entries from App state
+Kill occurs (UI or tray) → kill_and_record → append + emit("ledger-updated", entry)
+App listen handler → prepend entry to ledgerEntries (max 100)
+User clicks Clear History → invoke("clear_ledger_entries") → onCleared → empty state
+```
+
+### 5.8 Error Handling
 
 - **Rust:** `PortPurgeError` enum with `thiserror::Error` → `Display` impl → converted to `String` in `lib.rs` via `.map_err(|e| e.to_string())`.
 - **Frontend:** Errors caught in try/catch → `showToast(String(err), "error")`.
 - **Access denied:** Mapped from OS stderr patterns ("Access is denied", "Permission denied", etc.).
 
-### 5.8 Request Lifecycle (IPC)
+### 5.9 Request Lifecycle (IPC)
 
 There is no HTTP request lifecycle. Tauri IPC is synchronous from the frontend's perspective (`await invoke(...)`), handled by registered `#[tauri::command]` functions in Rust.
 
@@ -302,46 +346,54 @@ There is no HTTP request lifecycle. Tauri IPC is synchronous from the frontend's
 ┌─────────────────────────┐
 │   React Frontend        │
 │   App.tsx + components  │
+│   LedgerDrawer (History)│
 └───────────┬─────────────┘
-            │ Tauri IPC
-            │ get_active_ports
-            │ get_process_details
-            │ kill_process_by_pid
+            │ Tauri IPC + events
+            │ get_active_ports · get_process_details
+            │ kill_process_by_pid · get/clear_ledger_entries
+            │ get_protected_process_names
+            │ ledger-updated (event)
             ▼
 ┌─────────────────────────┐
 │   Tauri Rust Backend    │
 │   lib.rs — IPC, plugins │
 └───────────┬─────────────┘
             │
-   ┌────────┼────────┐
-   ▼        ▼        ▼
-┌──────┐ ┌──────┐ ┌──────────┐
-│ tray │ │ win  │ │ unix     │
-│ .rs  │ │ .rs  │ │ .rs      │
-└──┬───┘ └──┬───┘ └────┬─────┘
-   │        │          │
+   ┌────────┼────────┬────────┐
+   ▼        ▼        ▼        ▼
+   ┌──────┐ ┌──────┐ ┌──────┐ ┌──────────┐
+│config│ │ledger│ │ tray │ │ win/unix │
+│ .rs  │ │ .rs  │ │ .rs  │ │ .rs      │
+└──┬───┘ └──┬───┘ └──┬───┘ └────┬─────┘
+   │        │        │          │
+   │        └─kill───┴─kill─────┘
+   │         via kill_and_record (is_protected gate)
    │        ▼          ▼
    │   netstat/taskkill  lsof/kill
-   │   PowerShell CIM    ps + exe path
-   └─► get_active_ports (3s poll) + tray quick-kill
+   │   JSON persist      ps + exe path
+   └─► purge-ledger.json + ledger-updated emit
 ```
 
 ### Separation of Concerns
 
 | Layer | Responsibility |
 |-------|----------------|
-| `App.tsx` | State orchestration, polling, IPC calls, optimistic kill (single + group), inspect/kill modals, updater logic, runtime version via `getVersion()` |
-| `src/components/*` | Presentational UI (sortable/grouped table rows, inspect/kill modals, toasts, filters, metrics) |
-| `src/utils/*` | Pure TS helpers: fuzzy search, port grouping, table sort — no React, no IPC |
-| `src/types.ts` | Shared TypeScript interfaces for IPC data shapes and table view models |
-| `lib.rs` | Tauri app lifecycle, IPC command registration, plugins, minimize-to-tray window event |
-| `tray/mod.rs` | Tray icon/menu, port-count icon states, 5 quick-kill slots, independent 3s poll loop |
+| `App.tsx` | State orchestration, polling, IPC calls, optimistic kill (single + group), inspect/kill modals, `protectedProcessNames` + ledger hydrate + `ledger-updated` subscription, updater logic, runtime version via `getVersion()` |
+| `src/utils/isProcessProtected.ts` | Smart Protect: `normalizeProcessName`, `isProcessProtected`, `SMART_PROTECT_KILL_TITLE` — mirrors Rust `config/mod.rs` |
+| `src/components/*` | Presentational UI (sortable/grouped table rows, inspect/kill modals, `LedgerDrawer`, toasts, filters, metrics) |
+| `src/utils/*` | Pure TS helpers: fuzzy search, port grouping, table sort, ledger formatting — no React, no IPC |
+| `src/types.ts` | Shared TypeScript interfaces for IPC data shapes and table view models (`LedgerEntry`, `KillSource`) |
+| `lib.rs` | Tauri app lifecycle, IPC command registration, plugins, minimize-to-tray window event; kills delegate to `ledger::kill_and_record` |
+| `config/mod.rs` | Smart Protect `config.json` persistence, `normalize_process_name`, `ConfigState::is_protected`, `get_protected_process_names` IPC |
+| `ledger/mod.rs` | Purge Ledger JSON persistence, `kill_and_record` (with Smart Protect pre-check), `append`, `get_ledger_entries`, `clear_ledger_entries`, `ledger-updated` emit — **single kill audit path** |
+| `tray/mod.rs` | Tray icon/menu, port-count icon states, 5 quick-kill slots, independent 3s poll loop; kills via `ledger::kill_and_record` |
 | `sys/mod.rs` | `Protocol`, shared types, localhost helpers, dedupe, platform dispatch via `#[cfg]` |
 | `sys/windows.rs` / `sys/unix.rs` | Port scan, kill, and process inspection; localhost filtering; blocking shell I/O via `spawn_blocking` |
 
 ### Design Patterns
 
-- **Command-Query separation:** Read commands (`get_active_ports`, `get_process_details`) vs write (`kill_process_by_pid`) IPC commands.
+- **Command-Query separation:** Read commands (`get_active_ports`, `get_process_details`, `get_ledger_entries`) vs write (`kill_process_by_pid`, `clear_ledger_entries`) IPC commands.
+- **Event push:** `ledger-updated` notifies React of new kill entries without polling the ledger file.
 - **Strategy pattern:** Platform-specific `sys` implementations selected at compile time.
 - **Optimistic UI:** Kill removes row immediately, rolls back on failure.
 - **Blocking work off async runtime:** `get_active_ports`, `get_process_details`, and `kill_process_by_pid` in `sys/` wrap `std::process::Command` in `tauri::async_runtime::spawn_blocking` so shell I/O does not block the Tauri async executor.
@@ -353,6 +405,7 @@ There is no HTTP request lifecycle. Tauri IPC is synchronous from the frontend's
 - Deduplication prefers known process names over `"Unknown"` (`dedupe_and_sort_ports`).
 - Windows performance optimization: single `tasklist` call builds PID→name map per scan cycle.
 - Tray module isolated from React; quick-kill and icon-state logic unit-tested in `tray/mod.rs`.
+- **Purge Ledger** centralizes all kills through `kill_and_record`; UI and tray share one audit path with live event updates.
 - Parser fixture tests for `netstat`, `lsof`, PowerShell process JSON, and `ps` output.
 - UI decomposed into focused components and `src/utils/` helpers; `App.tsx` handles orchestration only.
 - Graceful partial inspection when OS ACLs limit sensitive fields (`permissionsLimited`).
@@ -372,9 +425,62 @@ There is no HTTP request lifecycle. Tauri IPC is synchronous from the frontend's
 
 ## 7. Database and Data Models
 
-No database or persistent data model was clearly identified from the codebase.
+No SQL database or ORM. Port scan data remains ephemeral and in-memory. **Exception:** the Purge Ledger persists kill history as a JSON append-log on disk.
 
-All data is ephemeral and in-memory:
+### Purge Ledger persistence (`src-tauri/src/ledger/mod.rs`)
+
+| Property | Value |
+|----------|-------|
+| **File** | `{app_data_dir}/purge-ledger.json` |
+| **Max entries** | 100 (newest first; truncated on append) |
+| **Write strategy** | Atomic: write `.json.tmp` then `rename` |
+| **Recovery** | Corrupt/missing file → start empty with warning log |
+
+### `KillSource` (Rust + TypeScript)
+
+```rust
+pub enum KillSource { Ui, Tray, Group, Inspect }  // serde camelCase → "ui", "tray", ...
+```
+
+```typescript
+export type KillSource = "ui" | "tray" | "group" | "inspect";
+```
+
+### `LedgerEntry` (Rust — `ledger/mod.rs`)
+
+```rust
+pub struct LedgerEntry {
+    pub id: String,              // "{unix_secs}-{pid}"
+    pub timestamp: String,       // UTC RFC3339
+    pub pid: u32,
+    pub port: u16,
+    pub protocol: String,
+    pub process_name: String,
+    pub success: bool,
+    pub error_message: Option<String>,
+    pub source: KillSource,
+}
+```
+
+Serde attribute: `#[serde(rename_all = "camelCase")]`.
+
+### `LedgerEntry` (TypeScript — `src/types.ts`)
+
+```typescript
+export interface LedgerEntry {
+  id: string;
+  timestamp: string;
+  pid: number;
+  port: number;
+  protocol: string;
+  processName: string;
+  success: boolean;
+  errorMessage: string | null;
+  source: KillSource;
+}
+```
+
+### Ephemeral runtime data (in-memory)
 
 ### `Protocol` (Rust — `src-tauri/src/sys/mod.rs`)
 
@@ -491,10 +597,25 @@ pub enum PortPurgeError {
     CommandError(String),
     #[error("Unknown error: {0}")]
     Unknown(String),
+    #[error("Protected process \"{0}\" cannot be terminated (Smart Protect).")]
+    ProtectedProcess(String),
 }
 ```
 
-No migrations, no ORM, no file-based persistence.
+No migrations, no ORM. Ledger uses custom JSON file I/O in `ledger/mod.rs`; Smart Protect uses `config/mod.rs`.
+
+### Smart Protect persistence (`src-tauri/src/config/mod.rs`)
+
+| Property | Value |
+|----------|-------|
+| **File** | `{app_data_dir}/config.json` |
+| **Schema** | `{ "protectedProcessNames": string[] }` (serde camelCase) |
+| **Write strategy** | Atomic: write `.json.tmp` then `rename`; seeded on first launch |
+| **Recovery** | Corrupt/missing file → OS-critical defaults rewritten |
+| **IPC** | `get_protected_process_names` → `string[]` for React hydrate |
+| **Defaults (Windows)** | `System`, `smss.exe`, `csrss.exe`, `wininit.exe`, `services.exe`, `lsass.exe`, `svchost.exe`, `explorer.exe` |
+| **Defaults (macOS)** | `launchd`, `kernel_task`, `WindowServer`, `loginwindow`, `syspolicyd` |
+| **Defaults (Linux)** | `systemd`, `systemd-journal`, `sshd` |
 
 ---
 
@@ -520,13 +641,58 @@ No migrations, no ORM, no file-based persistence.
 | Property | Value |
 |----------|-------|
 | **Type** | Tauri command (async) |
-| **Frontend call** | `invoke("kill_process_by_pid", { pid })` |
-| **Rust handler** | `lib.rs` → `sys::kill_process_by_pid(pid)` |
-| **Request** | `{ pid: number }` (u32) |
+| **Frontend call** | `invoke("kill_process_by_pid", { pid, port, protocol, processName, source })` |
+| **Rust handler** | `lib.rs` → `ledger::kill_and_record(KillContext)` → `sys::kill_process_by_pid(pid)` |
+| **Request** | `{ pid, port, protocol, processName, source }` — `source` is `KillSource` |
 | **Response** | `()` (empty success) |
-| **Error** | `String` |
+| **Side effects** | Appends `LedgerEntry` to ledger; emits `ledger-updated` event with entry payload |
+| **Error** | `String` (original `PortPurgeError` from sys kill — not swallowed) |
 | **Auth** | None (admin/sudo may be required by OS) |
-| **Related files** | `src/App.tsx`, `src-tauri/src/lib.rs`, `src-tauri/src/sys/*.rs` |
+| **Error** | `String` (includes `ProtectedProcess` message from Smart Protect gate) |
+| **Related files** | `src/App.tsx`, `src-tauri/src/lib.rs`, `src-tauri/src/ledger/mod.rs`, `src-tauri/src/config/mod.rs`, `src-tauri/src/tray/mod.rs`, `src-tauri/src/sys/*.rs` |
+
+### `get_protected_process_names`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Tauri command (sync) |
+| **Frontend call** | `invoke<string[]>("get_protected_process_names")` |
+| **Rust handler** | `config/mod.rs` → clone `protected_process_names` from `ConfigState` |
+| **Request** | None |
+| **Response** | `string[]` |
+| **Related files** | `src/App.tsx`, `src/utils/isProcessProtected.ts`, `src-tauri/src/config/mod.rs` |
+
+### `get_ledger_entries`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Tauri command (sync) |
+| **Frontend call** | `invoke<LedgerEntry[]>("get_ledger_entries")` |
+| **Rust handler** | `ledger/mod.rs` → clone in-memory `LedgerState` entries |
+| **Request** | None |
+| **Response** | `LedgerEntry[]` (newest first) |
+| **Related files** | `src/App.tsx`, `src/components/LedgerDrawer.tsx`, `src-tauri/src/ledger/mod.rs` |
+
+### `clear_ledger_entries`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Tauri command (sync) |
+| **Frontend call** | `invoke("clear_ledger_entries")` |
+| **Rust handler** | `ledger/mod.rs` → clear mutex + write empty array to disk |
+| **Request** | None |
+| **Response** | `()` |
+| **Related files** | `src/components/LedgerDrawer.tsx`, `src-tauri/src/ledger/mod.rs` |
+
+### `ledger-updated` (Tauri event — not IPC invoke)
+
+| Property | Value |
+|----------|-------|
+| **Direction** | Rust backend → React frontend |
+| **Emit** | `app.emit("ledger-updated", &entry)` in `ledger::kill_and_record` after append |
+| **Listen** | `listen<LedgerEntry>("ledger-updated", handler)` in `App.tsx` |
+| **Payload** | `LedgerEntry` for the kill just recorded |
+| **Related files** | `src-tauri/src/ledger/mod.rs`, `src/App.tsx` |
 
 ### `get_process_details`
 
@@ -561,19 +727,22 @@ Configured in `src-tauri/tauri.conf.json` → `plugins.updater.endpoints`.
 | File | Purpose | Dependencies |
 |------|---------|--------------|
 | `src/main.tsx` | React bootstrap with StrictMode | `react`, `react-dom`, `App`, `index.css` |
-| `src/App.tsx` | State, IPC, polling, single/group kill, inspect/updater orchestration, `getVersion()` for badge | `@tauri-apps/api` (core + app), updater/process plugins, components, `types`, `utils` |
-| `src/types.ts` | `PortInfo`, `PortGroup`, `ProcessDetails`, `TableSortConfig`, `Toast`, `DownloadProgress` | — |
+| `src/App.tsx` | State, IPC, polling, single/group kill, Smart Protect + ledger hydrate, inspect/updater orchestration, `getVersion()` for badge | `@tauri-apps/api` (core + app + event), updater/process plugins, components, `types`, `utils` |
+| `src/types.ts` | `PortInfo`, `PortGroup`, `ProcessDetails`, `LedgerEntry`, `KillSource`, `TableSortConfig`, `Toast`, `DownloadProgress` | — |
+| `src/utils/isProcessProtected.ts` | `normalizeProcessName`, `isProcessProtected`, `SMART_PROTECT_KILL_TITLE` | — |
+| `src/utils/formatLedger.ts` | `formatRelativeTime`, `formatKillSource` for History drawer | `types` |
 | `src/utils/fuzzySearch.ts` | `filterPortsByFuzzyQuery`, ordered-subsequence match | `types` |
 | `src/utils/groupPorts.ts` | `groupByProcessName` → `PortGroup[]` | `types` |
 | `src/utils/sortPorts.ts` | `sortFlatPorts`, `sortGroupedPorts`, `comparePorts` | `types` |
 | `src/components/PortTable.tsx` | Table shell: sort state, flat vs grouped rendering, empty states | `PortTableRow`, `PortGroupRow`, `EmptyState`, `sortPorts`, lucide-react |
-| `src/components/PortTableRow.tsx` | Single port row with Inspect/Kill actions | `types`, lucide-react |
-| `src/components/PortGroupRow.tsx` | Expandable group header + nested port rows; Kill Group action | `PortTableRow`, `types`, lucide-react |
+| `src/components/PortTableRow.tsx` | Single port row with Inspect/Kill; Smart Protect shield + disabled kill | `types`, `isProcessProtected`, lucide-react |
+| `src/components/PortGroupRow.tsx` | Expandable group header + nested port rows; Kill Group with Smart Protect guardrails | `PortTableRow`, `types`, `isProcessProtected`, lucide-react |
 | `src/components/SearchFilters.tsx` | Fuzzy search input, group-by toggle, ALL/TCP/UDP pills | — |
 | `src/components/MetricsBar.tsx` | Total/TCP/UDP count badges | — |
-| `src/components/ProcessDetailsModal.tsx` | Deep process inspection; fetches `get_process_details`; kill-from-inspect | `@tauri-apps/api/core`, `types` |
+| `src/components/ProcessDetailsModal.tsx` | Deep process inspection; kill-from-inspect with Smart Protect disabled state | `@tauri-apps/api/core`, `types`, `isProcessProtected` |
 | `src/components/KillConfirmModal.tsx` | Single-port kill confirmation overlay | `types` |
 | `src/components/KillGroupConfirmModal.tsx` | Batch kill confirmation for all PIDs in a `PortGroup` | `types` |
+| `src/components/LedgerDrawer.tsx` | Purge Ledger History slide-over; clear history IPC | `@tauri-apps/api/core`, `types`, `formatLedger` |
 | `src/components/UpdateModal.tsx` | Updater version/download UI; receives `currentVersion` from parent | `@tauri-apps/plugin-updater` types |
 | `src/components/ToastContainer.tsx` | Toast stack (bottom-right) | `types` |
 | `src/components/EmptyState.tsx` | No-ports / no-results / permission empty states | `public/illustrations/*.webp` |
@@ -585,8 +754,10 @@ Configured in `src-tauri/tauri.conf.json` → `plugins.updater.endpoints`.
 | File | Purpose | Dependencies |
 |------|---------|--------------|
 | `src-tauri/src/main.rs` | Binary entry, Windows subsystem attribute | `portpurge_lib` |
-| `src-tauri/src/lib.rs` | Tauri builder, IPC commands, plugins, window minimize-to-tray, test | `sys`, `tray`, tauri, plugins |
-| `src-tauri/src/tray/mod.rs` | Tray icon states, 5 kill menu slots, `refresh_tray_ports` poll loop, tray kill handler | `sys`, tauri tray/menu APIs |
+| `src-tauri/src/lib.rs` | Tauri builder, IPC commands, plugins, window minimize-to-tray, test | `sys`, `config`, `ledger`, `tray`, tauri, plugins |
+| `src-tauri/src/config/mod.rs` | Smart Protect `config.json` I/O, `normalize_process_name`, `is_protected`, `get_protected_process_names` | serde, tauri `Manager` |
+| `src-tauri/src/ledger/mod.rs` | Purge Ledger JSON I/O, `kill_and_record` (Smart Protect pre-check), `append`, ledger IPC, `ledger-updated` emit | `config`, `sys`, serde, tauri `Emitter` |
+| `src-tauri/src/tray/mod.rs` | Tray icon states, 5 kill menu slots, `refresh_tray_ports` poll loop, tray kill via `kill_and_record` | `ledger`, `sys`, tauri tray/menu APIs |
 | `src-tauri/src/sys/mod.rs` | `Protocol`, `PortInfo`, `ProcessDetails`, shared types, localhost helpers, dedupe, platform re-exports | serde, thiserror |
 | `src-tauri/src/sys/windows.rs` | `parse_netstat_line`, port scan/kill, PowerShell CIM process inspect (`spawn_blocking`) | std::process::Command, tauri async runtime |
 | `src-tauri/src/sys/unix.rs` | `parse_lsof_line`, port scan/kill, `ps` process inspect + exe resolution (`spawn_blocking`) | std::process::Command, tauri async runtime |
@@ -819,10 +990,10 @@ npm run tauri dev                                                      # Manual 
 | Dual port polling | `App.tsx` + `tray/mod.rs` | Both poll `get_active_ports` every 3s — redundant shell commands when app is running |
 | SIGKILL on Unix | `sys/unix.rs` | Uses `kill -9` with no graceful shutdown attempt |
 | Clippy warnings | `sys/unix.rs` (and possibly others) | `cargo clippy` passes with warnings (e.g. `needless_borrows_for_generic_args`) |
-| Version label mismatch | `README.md` vs manifests | README headings describe **v0.2.0** features; `package.json`, `Cargo.toml`, and `tauri.conf.json` still **0.1.0** |
+| Version label mismatch | `README.md` vs manifests | **Resolved in v0.5.0** — manifests and README aligned at `0.5.0` |
+| README missing grouping/fuzzy docs | `README.md` | **Partially resolved** — README updated for v0.5.0 Smart Protect; grouping/fuzzy summarized under port monitoring |
 | Command-line sensitivity | `ProcessDetailsModal.tsx` ~line 194 | Inspect modal warns command lines may contain sensitive arguments |
 | No LICENSE file | repo root | Usage terms unclear |
-| README missing grouping/fuzzy docs | `README.md` | Code has group-by-process, fuzzy search, and group kill; README still documents basic search/filters only |
 | Lint/format not in CI | `.github/workflows/release.yml` | `npm run lint` and `npm run build` not gated before release |
 
 ### Resolved Since Prior Documentation
@@ -836,13 +1007,15 @@ npm run tauri dev                                                      # Manual 
 | Missing favicon | **Resolved** — `index.html` points to `/tauri.svg` |
 | No CI tests | **Resolved** — `cargo test` step added to `release.yml` |
 | No parser unit tests | **Resolved** — fixture tests in `windows.rs`, `unix.rs`, `mod.rs` |
-| Monolithic 570-line `App.tsx` | **Partially resolved** — split into 11 components + `src/utils/` (~442 lines in `App.tsx`) |
+| Monolithic 570-line `App.tsx` | **Partially resolved** — split into 11 components + `src/utils/` (~441 lines in `App.tsx`) |
 | Hardcoded UI version strings | **Resolved** — `getVersion()` from `@tauri-apps/api/app`; `UpdateModal` receives `currentVersion` prop |
 | No ESLint / Prettier / clippy | **Resolved** — `eslint.config.js`, `.prettierrc`, `npm run lint` / `npm run format` scripts |
 | `Protocol` compile error / missing `Display` | **Resolved** — `impl Display for Protocol` in `sys/mod.rs`; `cargo test` passes |
 | Missing `public/illustrations/` | **Resolved** — three `.webp` files under `public/illustrations/` |
 | `ai/AI_RULES.md` monolithic UI rule | **Resolved** — updated to component-based frontend guidance |
-| README architecture diagram stale | **Resolved** — `README.md` updated with component diagram and inspect flow |
+| README architecture diagram stale | **Resolved** — `README.md` updated with ledger architecture |
+| No Purge Ledger / persistence | **Resolved in v0.4.0** — `ledger/mod.rs`, `LedgerDrawer`, `ledger-updated` events |
+| No Smart Protect / config denylist | **Resolved in v0.5.0** — `config/mod.rs`, `isProcessProtected.ts`, UI shield guardrails |
 
 ---
 
@@ -881,8 +1054,7 @@ Updates are verified via embedded public key (`plugins.updater.pubkey` in `tauri
 
 ### Sensitive Data
 
-- No user accounts, passwords, or PII stored.
-- Port/process data is ephemeral and never persisted by the app.
+- Port/process scan data is ephemeral. **Purge Ledger** persists kill metadata (process name, PID, port, protocol, success/error, source, timestamp) in `purge-ledger.json` under the app data directory.
 - **Process inspection** may display **command lines / argv** that can contain secrets (API keys, tokens). `ProcessDetailsModal.tsx` warns users; treat inspect output as sensitive in screenshots and logs.
 
 ### Dependency Risks
@@ -902,6 +1074,7 @@ Standard npm and Cargo dependencies. No automated vulnerability scanning configu
 | `.github/workflows/release.yml` | Breaks release pipeline |
 | `src-tauri/src/sys/*.rs` | Fragile OS output parsing |
 | `src-tauri/src/tray/mod.rs` | Tray kill without confirmation; poll loop + mutex state; icon/menu updates |
+| `src-tauri/src/ledger/mod.rs` | Purge Ledger persistence, `kill_and_record`, tray/UI kill audit path |
 | `updater.key` / signing secrets | Never read, commit, or expose |
 
 ### Architecture Rules
@@ -917,12 +1090,15 @@ Standard npm and Cargo dependencies. No automated vulnerability scanning configu
 - Changing `netstat`/`lsof` parsing without updating fixture tests in the same module.
 - Modifying only one platform module when behavior should be cross-platform (prefer shared logic in `mod.rs` for localhost filtering, dedupe).
 - Adding database/ORM without explicit request.
+- Calling `sys::kill_process_by_pid` outside `ledger::kill_and_record` (bypasses audit log and `ledger-updated`).
 - Removing tray, single-instance, or minimize-to-tray without explicit request.
+
 - Changing tray kill-slot count or poll interval without updating `tray/mod.rs` tests.
 
 ### Safe Modification Patterns
 
-- **New IPC command:** Add handler in `lib.rs` → implement in `sys/` (both platform modules for inspection) → register in `invoke_handler` → sync `src/types.ts` → call from `App.tsx` or relevant component.
+- **New kill path:** Must use `ledger::kill_and_record` with appropriate `KillSource` — never call `sys::kill_process_by_pid` directly.
+- **New IPC command:** Add handler in `lib.rs` → implement in `sys/` or `ledger/` as appropriate → register in `invoke_handler` → sync `src/types.ts` → call from `App.tsx` or relevant component.
 - **UI change:** Edit targeted component in `src/components/` or pure logic in `src/utils/`; state/IPC in `App.tsx`; match existing Tailwind `@theme` / glass patterns.
 - **Version bump:** Update all version locations listed in Section 12.
 
@@ -941,6 +1117,7 @@ Standard npm and Cargo dependencies. No automated vulnerability scanning configu
 - Adding UI assets under wrong path — illustrations live in `public/illustrations/*.webp`.
 - Calling `std::process::Command` directly in async `sys` functions — use `tauri::async_runtime::spawn_blocking` (existing pattern in both platform modules).
 - Adding table sort/group/search logic inline in components — prefer `src/utils/` (existing pattern).
+- Documenting IPC commands, modules, or persistence **not present in the repo** — verify `lib.rs` `invoke_handler` and filesystem before updating this file.
 - **`ai/AI_RULES.md` drift:** Omits `ProcessDetailsModal`, `KillGroupConfirmModal`, `PortGroupRow`, `PortTableRow`, `src/utils/*`; tray logic now in `tray/mod.rs` — follow-up sync recommended.
 
 ---
@@ -958,7 +1135,7 @@ Standard npm and Cargo dependencies. No automated vulnerability scanning configu
 
 | Issue | Why It Matters | First Step | Related Files |
 |-------|----------------|------------|---------------|
-| Version label mismatch (README v0.2.0 vs manifests 0.1.0) | Confusing release state for users and CI | Bump all version fields to 0.2.0 if release intended, or tone down README heading | `package.json`, `Cargo.toml`, `tauri.conf.json`, `README.md` |
+| Version label mismatch (README vs manifests) | Confusing release state | **Resolved in v0.5.0** — all at `0.5.0` |
 | Clippy warnings in `sys/` | Noise may hide real issues | Run `cargo clippy --fix` or address warnings | `sys/unix.rs`, `sys/windows.rs` |
 | `ai/AI_RULES.md` component/IPC/utils drift | AI agents may miss new components, `src/utils/`, and `tray/mod.rs` split | Sync AI_RULES with current frontend + tray layout | `ai/AI_RULES.md` |
 | README missing grouping/fuzzy docs | Users unaware of group-by and fuzzy search | Document in README Features section | `README.md` |
@@ -1005,18 +1182,29 @@ Standard npm and Cargo dependencies. No automated vulnerability scanning configu
 | Command | Args | Returns |
 |---------|------|---------|
 | `get_active_ports` | none | `PortInfo[]` |
-| `kill_process_by_pid` | `{ pid: number }` | void |
+| `kill_process_by_pid` | `{ pid, port, protocol, processName, source }` | void |
 | `get_process_details` | `{ pid: number }` | `ProcessDetails` |
+| `get_ledger_entries` | none | `LedgerEntry[]` |
+| `clear_ledger_entries` | none | void |
+| `get_protected_process_names` | none | `string[]` |
+
+### Tauri Events
+
+| Event | Payload | Direction |
+|-------|---------|-----------|
+| `ledger-updated` | `LedgerEntry` | Rust → React (after each kill in `kill_and_record`) |
 
 ### Key Paths
 
 | Concern | Path |
 |---------|------|
 | UI orchestration | `src/App.tsx` |
-| UI components | `src/components/` (incl. `PortGroupRow`, `KillGroupConfirmModal`, `ProcessDetailsModal`) |
-| Frontend utilities | `src/utils/` (`fuzzySearch`, `groupPorts`, `sortPorts`) |
+| UI components | `src/components/` (incl. `LedgerDrawer`, `PortGroupRow`, `KillGroupConfirmModal`, `ProcessDetailsModal`) |
+| Frontend utilities | `src/utils/` (`fuzzySearch`, `groupPorts`, `sortPorts`, `formatLedger`, `isProcessProtected`) |
 | Shared TS types | `src/types.ts` |
 | IPC handlers | `src-tauri/src/lib.rs` |
+| Smart Protect config | `src-tauri/src/config/mod.rs` |
+| Purge Ledger | `src-tauri/src/ledger/mod.rs` |
 | System tray | `src-tauri/src/tray/mod.rs` |
 | Shared port logic | `src-tauri/src/sys/mod.rs` |
 | Windows logic | `src-tauri/src/sys/windows.rs` |
@@ -1084,6 +1272,13 @@ Standard npm and Cargo dependencies. No automated vulnerability scanning configu
 | **PortGroup** | Frontend-only aggregate of ports sharing a process name; used for grouped table view and batch kill |
 | **Fuzzy search** | Ordered-subsequence match in `filterPortsByFuzzyQuery()` — not full-text or Levenshtein |
 | **permissionsLimited** | Flag when OS ACLs block sensitive inspect fields; UI shows partial data |
+| **Purge Ledger** | JSON append-log of last 100 kill attempts; file `purge-ledger.json` in app data dir |
+| **kill_and_record** | Central Rust function in `ledger/mod.rs` — executes kill, logs entry, emits `ledger-updated` |
+| **ledger-updated** | Tauri event pushed to React after each kill with full `LedgerEntry` payload |
+| **KillSource** | Origin tag for a kill: `ui`, `tray`, `group`, or `inspect` |
+| **Smart Protect** | v0.5.0 denylist feature — `config.json` protected process names; UI guardrails + backend `ProtectedProcess` gate in `kill_and_record` |
+| **isProcessProtected** | TS/Rust helper — trim, lowercase, strip `.exe`; never matches empty/`unknown` |
+| **ProtectedProcess** | `PortPurgeError` variant returned when kill blocked by Smart Protect; logged to Purge Ledger |
 | **SIGKILL (`kill -9`)** | Forceful Unix signal that immediately terminates a process |
 
 ---
@@ -1094,7 +1289,7 @@ Standard npm and Cargo dependencies. No automated vulnerability scanning configu
 
 1. **SIGKILL vs graceful kill:** Is `kill -9` on Unix intentional for a dev utility, or should graceful `kill` be tried first?
 2. **LICENSE:** No license file in repo root — usage/distribution terms undefined.
-3. **Version label:** README describes v0.2.0 capabilities; manifests remain 0.1.0 — confirm intended release version before bumping.
+3. **Ledger retention:** Max 100 entries is fixed in `ledger/mod.rs` — confirm before changing cap or storage format.
 
 ### Assumptions Made in This Document
 
