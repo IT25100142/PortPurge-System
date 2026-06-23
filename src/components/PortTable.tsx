@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, Hash, Skull, Terminal } from "lucide-react";
+import { ArrowDown, ArrowUp, Hash, Search, Skull, Terminal } from "lucide-react";
 import { EmptyState } from "./EmptyState";
 import type { PortInfo } from "../types";
 
@@ -31,6 +31,7 @@ interface PortTableProps {
   isRefreshing: boolean;
   killingPid: number | null;
   onRequestKill: (port: PortInfo) => void;
+  onRequestInspect: (port: PortInfo) => void;
   onClearFilters?: () => void;
 }
 
@@ -42,6 +43,7 @@ export function PortTable({
   isRefreshing,
   killingPid,
   onRequestKill,
+  onRequestInspect,
   onClearFilters,
 }: PortTableProps) {
   const [sortConfig, setSortConfig] = useState<SortConfig>({ key: "port", direction: "asc" });
@@ -141,15 +143,26 @@ export function PortTable({
                     </td>
 
                     <td className="px-6 py-4 text-right">
-                      <button
-                        type="button"
-                        onClick={() => onRequestKill(portInfo)}
-                        disabled={isKilling}
-                        className="px-3 py-1.5 text-xs font-bold glass-control text-slate-300 hover:bg-red-950/20 hover:border-red-900/40 hover:text-red-400 transition duration-200 flex items-center gap-1.5 cursor-pointer disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/30 ml-auto"
-                      >
-                        <Skull className="w-3.5 h-3.5 text-slate-500 hover:text-inherit" />
-                        <span>Kill</span>
-                      </button>
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => onRequestInspect(portInfo)}
+                          disabled={isKilling}
+                          className="px-3 py-1.5 text-xs font-bold glass-control text-slate-300 hover:bg-indigo-950/20 hover:border-indigo-900/40 hover:text-indigo-400 transition duration-200 flex items-center gap-1.5 cursor-pointer disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30"
+                        >
+                          <Search className="w-3.5 h-3.5 text-slate-500 hover:text-inherit" />
+                          <span>Inspect</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onRequestKill(portInfo)}
+                          disabled={isKilling}
+                          className="px-3 py-1.5 text-xs font-bold glass-control text-slate-300 hover:bg-red-950/20 hover:border-red-900/40 hover:text-red-400 transition duration-200 flex items-center gap-1.5 cursor-pointer disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/30"
+                        >
+                          <Skull className="w-3.5 h-3.5 text-slate-500 hover:text-inherit" />
+                          <span>Kill</span>
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );
