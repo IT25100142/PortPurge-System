@@ -1,4 +1,5 @@
 use crate::ledger::{self, KillContext, KillSource};
+use crate::summon::{summon_main_window, SummonOptions};
 use crate::sys::{self, PortInfo, PortPurgeError, Protocol};
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -268,10 +269,12 @@ fn handle_menu_event(app: &AppHandle, menu_id: &str) {
             app.exit(0);
         }
         "show" => {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            summon_main_window(
+                app,
+                SummonOptions {
+                    emit_focus_event: false,
+                },
+            );
         }
         _ => {}
     }
@@ -324,8 +327,12 @@ pub fn init(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     if window.is_visible().unwrap_or(false) {
                         let _ = window.hide();
                     } else {
-                        let _ = window.show();
-                        let _ = window.set_focus();
+                        summon_main_window(
+                            &app,
+                            SummonOptions {
+                                emit_focus_event: false,
+                            },
+                        );
                     }
                 }
             }
