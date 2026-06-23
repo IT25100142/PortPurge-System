@@ -1,5 +1,7 @@
-use super::{host_from_addr_port, is_localhost_address, PortInfo, PortPurgeError};
-use std::collections::HashMap;
+use super::{
+    dedupe_and_sort_ports, host_from_addr_port, is_localhost_address, PortInfo, PortPurgeError,
+    Protocol,
+};
 use std::process::Command;
 
 /// Parse a single `lsof -i -P -n` output line into a localhost-bound port entry.
@@ -9,22 +11,18 @@ pub(crate) fn parse_lsof_line(line: &str) -> Option<PortInfo> {
         return None;
     }
 
-    let parts: Vec<&str> = line.split_whitespace().collect();
-    if parts.len() < 9 {
-        return None;
-    }
+    let mut parts = line.split_whitespace();
+    let process_name = parts.next()?.to_string();
+    let pid = parts.next()?.parse::<u32>().ok()?;
+    let _user = parts.next()?;
+    let _fd = parts.next()?;
+    let _type_field = parts.next()?;
+    let _device = parts.next()?;
+    let _size = parts.next()?;
+    let protocol = Protocol::parse_known(parts.next()?)?;
+    let name_col = parts.next()?;
 
-    let process_name = parts[0].to_string();
-    let pid = parts[1].parse::<u32>().ok()?;
-    let protocol = parts[7];
-
-    if protocol != "TCP" && protocol != "UDP" {
-        return None;
-    }
-
-    let name_col = parts[8];
-
-    if protocol == "TCP" && !name_col.contains("(LISTEN)") {
+    if matches!(protocol, Protocol::Tcp) && !name_col.contains("(LISTEN)") {
         return None;
     }
 
@@ -41,7 +39,7 @@ pub(crate) fn parse_lsof_line(line: &str) -> Option<PortInfo> {
 
     Some(PortInfo {
         port,
-        protocol: protocol.to_string(),
+        protocol,
         pid,
         process_name,
     })
@@ -49,74 +47,71 @@ pub(crate) fn parse_lsof_line(line: &str) -> Option<PortInfo> {
 
 /// Scans active TCP/UDP ports using `lsof -i -P -n` on Unix systems and parses the process mapping.
 pub async fn get_active_ports() -> Result<Vec<PortInfo>, PortPurgeError> {
-    let mut ports = Vec::new();
-    let mut cmd = Command::new("lsof");
-    cmd.args(&["-i", "-P", "-n"]);
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut ports = Vec::new();
+        let mut cmd = Command::new("lsof");
+        cmd.args(&["-i", "-P", "-n"]);
 
-    let output = cmd.output().map_err(|e| PortPurgeError::CommandError(e.to_string()))?;
-    if !output.status.success() {
-        let stdout_str = String::from_utf8_lossy(&output.stdout);
-        if stdout_str.trim().is_empty() {
-            return Ok(vec![]);
+        let output = cmd
+            .output()
+            .map_err(|e| PortPurgeError::CommandError(e.to_string()))?;
+        if !output.status.success() {
+            let stdout_str = String::from_utf8_lossy(&output.stdout);
+            if stdout_str.trim().is_empty() {
+                return Ok(vec![]);
+            }
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            return Err(PortPurgeError::CommandError(stderr));
         }
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(PortPurgeError::CommandError(stderr));
-    }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        if let Some(port_info) = parse_lsof_line(line) {
-            ports.push(port_info);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            if let Some(port_info) = parse_lsof_line(line) {
+                ports.push(port_info);
+            }
         }
-    }
 
-    let mut unique_ports = HashMap::new();
-    for p in ports {
-        let key = (p.port, p.protocol.clone());
-        unique_ports
-            .entry(key)
-            .and_modify(|existing: &mut PortInfo| {
-                if (existing.process_name == "Unknown" || existing.process_name.is_empty())
-                    && p.process_name != "Unknown"
-                {
-                    *existing = p.clone();
-                }
-            })
-            .or_insert(p);
-    }
-
-    let mut result: Vec<PortInfo> = unique_ports.into_values().collect();
-    result.sort_by_key(|p| p.port);
-
-    Ok(result)
+        Ok(dedupe_and_sort_ports(ports))
+    })
+    .await
+    .map_err(|e| PortPurgeError::Unknown(e.to_string()))?
 }
 
 /// Terminates a process on Unix using `kill -9 <pid>`.
 pub async fn kill_process_by_pid(pid: u32) -> Result<(), PortPurgeError> {
-    let mut cmd = Command::new("kill");
-    cmd.args(&["-9", &pid.to_string()]);
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut cmd = Command::new("kill");
+        cmd.args(&["-9", &pid.to_string()]);
 
-    let output = cmd.output().map_err(|e| PortPurgeError::CommandError(e.to_string()))?;
+        let output = cmd
+            .output()
+            .map_err(|e| PortPurgeError::CommandError(e.to_string()))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let error_msg = stderr.to_string();
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let error_msg = stderr.to_string();
 
-        if error_msg.contains("Operation not permitted") || error_msg.contains("Permission denied") {
-            return Err(PortPurgeError::AccessDenied);
-        } else if error_msg.contains("No such process") {
-            return Err(PortPurgeError::ProcessNotFound);
-        } else {
-            return Err(PortPurgeError::CommandError(error_msg));
+            if error_msg.contains("Operation not permitted")
+                || error_msg.contains("Permission denied")
+            {
+                return Err(PortPurgeError::AccessDenied);
+            } else if error_msg.contains("No such process") {
+                return Err(PortPurgeError::ProcessNotFound);
+            } else {
+                return Err(PortPurgeError::CommandError(error_msg));
+            }
         }
-    }
 
-    Ok(())
+        Ok(())
+    })
+    .await
+    .map_err(|e| PortPurgeError::Unknown(e.to_string()))?
 }
 
 #[cfg(test)]
 mod tests {
     use super::parse_lsof_line;
+    use super::Protocol;
 
     #[test]
     fn parse_lsof_line_tcp_ipv4_localhost() {
@@ -125,7 +120,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed.port, 3000);
-        assert_eq!(parsed.protocol, "TCP");
+        assert_eq!(parsed.protocol, Protocol::Tcp);
         assert_eq!(parsed.pid, 1234);
         assert_eq!(parsed.process_name, "node");
     }
@@ -147,7 +142,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed.port, 5353);
-        assert_eq!(parsed.protocol, "UDP");
+        assert_eq!(parsed.protocol, Protocol::Udp);
     }
 
     #[test]
@@ -176,6 +171,8 @@ mod tests {
 
     #[test]
     fn parse_lsof_line_rejects_header() {
-        assert!(parse_lsof_line("COMMAND   PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME").is_none());
+        assert!(
+            parse_lsof_line("COMMAND   PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME").is_none()
+        );
     }
 }
