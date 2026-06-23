@@ -24,6 +24,16 @@ Built with **Tauri v2**, **React 19**, **TypeScript**, and **Tailwind CSS v4**.
 - **Graceful permission handling** — When OS ACLs block sensitive fields, the inspect modal returns partial data with a clear warning instead of failing silently.
 - **Kill from inspect** — Jump from the details modal straight into the existing kill confirmation flow.
 
+### v0.6.0 — Summon Global Shortcut
+
+- **OS-wide hotkey** — Press **`Alt+Shift+P`** (Windows/Linux) or **`Option+Shift+P`** (macOS) to instantly restore PortPurge from the system tray or background.
+- **Window management** — Unminimizes, shows, and brings the main window to the foreground with OS focus — works even when the app is hidden via close-to-tray.
+- **Instant search focus** — The shortcut emits a `window-summoned` event; React auto-focuses and selects the fuzzy search input so you can type a port or process name immediately.
+- **Tray-safe registration** — Uses the official `tauri-plugin-global-shortcut`, registered in Rust at startup. If the hotkey conflicts with another app, registration fails gracefully (logged to stderr; app still runs).
+- **Hardcoded default** — v0.6.0 does not include a Settings UI to customize the shortcut.
+
+Tray **Show**, single-instance relaunch, and tray left-click restore use the same window helper but do **not** auto-focus the search bar — only the global shortcut does.
+
 ### v0.5.0 — Smart Protect (Safe Mode)
 
 - **Protected process denylist** — A persistent `config.json` in the app data directory lists process names that cannot be terminated from the UI, system tray, or batch kill flows.
@@ -84,6 +94,7 @@ Restart PortPurge after editing `config.json` (hot-reload is not supported in v0
 - **Glass-panel UI** — Dark, minimal design system built on Tailwind `@theme` tokens.
 - **System tray** — Left-click toggles the window; right-click menu shows up to **5 quick-kill slots** for recent localhost ports, then Show / Quit. Tray icon reflects port load (normal / amber / red).
 - **Minimize-to-tray** — Close hides to the tray instead of quitting.
+- **Summon shortcut** — `Alt+Shift+P` / `Option+Shift+P` restores the window and focuses search (see v0.6.0 above).
 - **Single-instance lock** — A second launch focuses the existing window.
 - **In-app updater** — Checks GitHub Releases on startup and installs updates with one click.
 
@@ -94,10 +105,10 @@ Restart PortPurge after editing `config.json` (hot-reload is not supported in v0
 | Layer | Technologies |
 |-------|----------------|
 | **Frontend** | React 19, Vite 7, TypeScript, Tailwind CSS v4, Lucide React |
-| **Backend** | Rust (Tauri v2), `serde` / `serde_json` / `thiserror`, platform parsers in `src-tauri/src/sys/` |
+| **Backend** | Rust (Tauri v2), `serde` / `serde_json` / `thiserror`, `tauri-plugin-global-shortcut`, platform parsers in `src-tauri/src/sys/` |
 | **Persistence** | `config.json` (Smart Protect denylist) + `purge-ledger.json` (kill history) in app data dir — no database |
 | **IPC** | `get_active_ports`, `get_process_details`, `kill_process_by_pid`, `get_ledger_entries`, `clear_ledger_entries`, `get_protected_process_names` |
-| **Events** | `ledger-updated` (Rust → React, payload: `LedgerEntry`) |
+| **Events** | `ledger-updated` (kill history), `window-summoned` (Summon shortcut → search focus) |
 | **OS tools** | Windows: `netstat`, `tasklist`, `taskkill`, PowerShell CIM · Unix: `lsof`, `ps`, `kill` |
 | **Quality (local)** | ESLint, Prettier, `cargo clippy`, `cargo fmt` via npm scripts |
 
@@ -108,32 +119,32 @@ Restart PortPurge after editing `config.json` (hot-reload is not supported in v0
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │                     React Frontend                           │
-│  App.tsx (state, IPC, polling, ledger + protect config)      │
-│  LedgerDrawer · PortTable · modals · isProcessProtected      │
+│  App.tsx (state, IPC, polling, ledger, summon focus)       │
+│  LedgerDrawer · PortTable · SearchFilters · modals           │
 └────────────────────────────┬─────────────────────────────────┘
                              │  Tauri IPC + events
                              ▼
 ┌──────────────────────────────────────────────────────────────┐
 │                Tauri Rust Backend (lib.rs)                   │
-│        IPC commands · config · ledger · tray · plugins       │
+│        IPC commands · summon · config · ledger · tray        │
 └────────────────────────────┬─────────────────────────────────┘
                              │
          ┌───────────────────┼───────────────────┐
          ▼                   ▼                   ▼
 ┌──────────────┐ ┌─────────────────┐ ┌───────────────┐ ┌─────────────────┐
-│ config/mod.rs│ │  ledger/mod.rs  │ │  tray/mod.rs  │ │  sys/ (win/unix)│
-│ Smart Protect│ │  kill_and_record│ │  quick-kill   │ │  port scan/kill │
-│ config.json  │ │  ledger persist │ │  tray poll    │ │  inspect parsers│
+│ summon/mod.rs│ │  ledger/mod.rs  │ │  tray/mod.rs  │ │  sys/ (win/unix)│
+│ Alt+Shift+P  │ │  kill_and_record│ │  quick-kill   │ │  port scan/kill │
+│ window focus │ │  ledger persist │ │  tray poll    │ │  inspect parsers│
 └──────┬───────┘ └────────┬────────┘ └───────┬───────┘ └─────────────────┘
        │                  │                    │
-       └──── is_protected ─┴── kill_and_record ┘
-              (all kills route here; protected blocked + logged)
+       │ window-summoned  └──── kill_and_record┘
+       └──────────────────► React search focus
 ```
 
 | Path | Role |
 |------|------|
-| `src/App.tsx` | Orchestration: state, IPC, polling, kill flows, `protectedProcessNames` hydrate, ledger + `ledger-updated` |
-| `src/utils/isProcessProtected.ts` | Mirrors Rust name normalization; used by rows, groups, modals, batch kill |
+| `src/App.tsx` | Orchestration: state, IPC, polling, kill flows, `window-summoned` listener, search input ref |
+| `src-tauri/src/summon/mod.rs` | `summon_main_window`, global shortcut (`Alt+Shift+P`), `window-summoned` emit |
 | `src-tauri/src/config/mod.rs` | `config.json` I/O, OS-critical default seeds, `is_protected` gate |
 | `src/components/LedgerDrawer.tsx` | Sliding History panel; clear ledger |
 | `src/utils/formatLedger.ts` | Relative time and kill-source display helpers |

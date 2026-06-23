@@ -1,12 +1,13 @@
 mod config;
 mod ledger;
+mod summon;
 mod sys;
 mod tray;
 
 use config::get_protected_process_names;
 use ledger::{clear_ledger_entries, get_ledger_entries, kill_and_record, KillContext, KillSource};
+use summon::{summon_main_window, SummonOptions};
 use sys::{PortInfo, ProcessDetails};
-use tauri::Manager;
 
 #[tauri::command]
 async fn get_active_ports() -> Result<Vec<PortInfo>, String> {
@@ -48,17 +49,25 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.show();
-                let _ = w.set_focus();
-            }
+            summon_main_window(
+                app,
+                SummonOptions {
+                    emit_focus_event: false,
+                },
+            );
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
             ledger::init(app)?;
             config::init(app)?;
-            tray::init(app)
+            tray::init(app)?;
+
+            if let Err(err) = summon::init_global_shortcut(app) {
+                eprintln!("Failed to register Summon global shortcut (Alt+Shift+P): {err}");
+            }
+
+            Ok(())
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

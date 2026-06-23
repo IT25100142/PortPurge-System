@@ -61,6 +61,7 @@ function App() {
   const [protectedProcessNames, setProtectedProcessNames] = useState<string[]>([]);
 
   const toastTimeoutRefs = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const removeToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
@@ -129,6 +130,27 @@ function App() {
     const subscribe = async () => {
       unlisten = await listen<LedgerEntry>("ledger-updated", (event) => {
         setLedgerEntries((prev) => [event.payload, ...prev].slice(0, MAX_LEDGER_ENTRIES));
+      });
+    };
+
+    subscribe();
+
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+
+    let unlisten: (() => void) | undefined;
+
+    const subscribe = async () => {
+      unlisten = await listen("window-summoned", () => {
+        requestAnimationFrame(() => {
+          searchInputRef.current?.focus();
+          searchInputRef.current?.select();
+        });
       });
     };
 
@@ -454,6 +476,7 @@ function App() {
           searchQuery={searchQuery}
           protocolFilter={protocolFilter}
           groupByProcess={groupByProcess}
+          inputRef={searchInputRef}
           onSearchChange={setSearchQuery}
           onProtocolChange={setProtocolFilter}
           onToggleGroupByProcess={() => setGroupByProcess((prev) => !prev)}
