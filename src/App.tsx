@@ -1,20 +1,24 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { check, Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { RotateCw } from "lucide-react";
+import { History, RotateCw } from "lucide-react";
 import { PortTable } from "./components/PortTable";
 import { ToastContainer } from "./components/ToastContainer";
 import { UpdateModal } from "./components/UpdateModal";
 import { KillConfirmModal } from "./components/KillConfirmModal";
 import { KillGroupConfirmModal } from "./components/KillGroupConfirmModal";
 import { ProcessDetailsModal } from "./components/ProcessDetailsModal";
+import { LedgerDrawer } from "./components/LedgerDrawer";
 import { MetricsBar } from "./components/MetricsBar";
 import { SearchFilters } from "./components/SearchFilters";
-import type { PortGroup, PortInfo, Toast } from "./types";
+import type { KillSource, LedgerEntry, PortGroup, PortInfo, Toast } from "./types";
 import { filterPortsByFuzzyQuery } from "./utils/fuzzySearch";
 import { groupByProcessName } from "./utils/groupPorts";
+
+const MAX_LEDGER_ENTRIES = 100;
 
 function formatLastRefreshed(date: Date | null): string {
   if (!date) return "—";
@@ -50,6 +54,9 @@ function App() {
   });
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [appVersion, setAppVersion] = useState<string | null>(null);
+  const [ledgerOpen, setLedgerOpen] = useState(false);
+  const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
+  const [isClearingLedger, setIsClearingLedger] = useState(false);
 
   const toastTimeoutRefs = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
@@ -143,28 +150,77 @@ function App() {
     return () => clearTimeout(timer);
   }, [showToast]);
 
-  const killProcess = async (pid: number, port: number) => {
+  useEffect(() => {
+    if (!isTauri()) return;
+
+    invoke<LedgerEntry[]>("get_ledger_entries")
+      .then((entries) => setLedgerEntries(entries))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+
+    let unlisten: (() => void) | undefined;
+
+    listen<LedgerEntry>("ledger-updated", (event) => {
+      setLedgerEntries((prev) => {
+        const withoutDuplicate = prev.filter((entry) => entry.id !== event.payload.id);
+        return [event.payload, ...withoutDuplicate].slice(0, MAX_LEDGER_ENTRIES);
+      });
+    }).then((unlistenFn) => {
+      unlisten = unlistenFn;
+    });
+
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
+  const clearLedger = useCallback(async () => {
+    setIsClearingLedger(true);
+    try {
+      await invoke("clear_ledger_entries");
+      setLedgerEntries([]);
+      showToast("Purge ledger cleared.", "success");
+    } catch (err) {
+      showToast(String(err), "error");
+    } finally {
+      setIsClearingLedger(false);
+    }
+  }, [showToast]);
+
+  const killProcess = async (target: PortInfo, source: KillSource = "ui") => {
     setKillTarget(null);
-    setKillingPid(pid);
+    setKillingPid(target.pid);
 
     const previousPorts = [...ports];
-    setPorts((prev) => prev.filter((p) => p.pid !== pid));
+    setPorts((prev) => prev.filter((p) => p.pid !== target.pid));
 
     try {
-      await invoke("kill_process_by_pid", { pid });
-      showToast(`Process ${pid} on Port ${port} terminated successfully.`, "success");
+      await invoke("kill_process_by_pid", {
+        pid: target.pid,
+        port: target.port,
+        protocol: target.protocol,
+        processName: target.processName,
+        source,
+      });
+      showToast(
+        `Process ${target.pid} on Port ${target.port} terminated successfully.`,
+        "success",
+      );
     } catch (err) {
       setPorts(previousPorts);
 
       const errMsg = String(err);
       if (errMsg.includes("Access Denied")) {
         showToast(
-          `Permission Denied: Run as administrator/sudo to terminate PID ${pid}.`,
+          `Permission Denied: Run as administrator/sudo to terminate PID ${target.pid}.`,
           "error",
           { permissionDenied: true },
         );
       } else {
-        showToast(`Failed to terminate PID ${pid}: ${errMsg}`, "error");
+        showToast(`Failed to terminate PID ${target.pid}: ${errMsg}`, "error");
       }
     } finally {
       setKillingPid(null);
@@ -188,8 +244,15 @@ function App() {
 
     for (const pid of pids) {
       setKillingPid(pid);
+      const portRow = group.ports.find((port) => port.pid === pid);
       try {
-        await invoke("kill_process_by_pid", { pid });
+        await invoke("kill_process_by_pid", {
+          pid,
+          port: portRow?.port ?? null,
+          protocol: portRow?.protocol ?? null,
+          processName: portRow?.processName ?? processLabel,
+          source: "group" satisfies KillSource,
+        });
         successCount++;
       } catch (err) {
         const errMsg = String(err);
@@ -350,6 +413,20 @@ function App() {
               </span>
               <button
                 type="button"
+                onClick={() => setLedgerOpen(true)}
+                className="relative flex items-center gap-2 px-4 py-2 text-sm font-semibold glass-control text-slate-200 hover:bg-slate-900/60 hover:text-white transition duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/50"
+                aria-label="Open purge history"
+              >
+                <History className="w-4 h-4 text-indigo-400" />
+                <span>History</span>
+                {ledgerEntries.length > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 min-w-[1.125rem] h-[1.125rem] px-1 flex items-center justify-center rounded-full bg-indigo-600 text-[10px] font-bold text-white tabular-nums">
+                    {ledgerEntries.length > 99 ? "99+" : ledgerEntries.length}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
                 onClick={() => fetchPorts(true)}
                 disabled={isRefreshing}
                 className="flex items-center gap-2 px-4 py-2 text-sm font-semibold glass-control text-slate-200 hover:bg-slate-900/60 hover:text-white transition duration-200 disabled:opacity-50 group cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/50"
@@ -398,7 +475,7 @@ function App() {
         isKilling={killTarget !== null && killingPid === killTarget.pid}
         onConfirm={() => {
           if (killTarget) {
-            killProcess(killTarget.pid, killTarget.port);
+            killProcess(killTarget);
           }
         }}
         onCancel={() => setKillTarget(null)}
@@ -434,6 +511,14 @@ function App() {
       )}
 
       <ToastContainer toasts={toasts} onDismiss={removeToast} />
+
+      <LedgerDrawer
+        isOpen={ledgerOpen}
+        onClose={() => setLedgerOpen(false)}
+        entries={ledgerEntries}
+        onClear={clearLedger}
+        isClearing={isClearingLedger}
+      />
     </div>
   );
 }
