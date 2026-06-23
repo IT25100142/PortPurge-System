@@ -97,8 +97,8 @@ export function KillGroupConfirmModal({
         <div className="flex items-start gap-2.5 p-3 rounded-xl bg-amber-950/20 border border-amber-800/30 text-amber-200/90">
           <AlertTriangle className="w-4 h-4 shrink-0 text-amber-500 mt-0.5" />
           <p className="text-xs leading-relaxed">
-            This will terminate{" "}
-            <span className="font-semibold">{target.pidCount}</span> unique process
+            This will terminate <span className="font-semibold">{target.pidCount}</span> unique
+            process
             {target.pidCount === 1 ? "" : "es"} named{" "}
             <span className="font-semibold">{processLabel}</span>. Protected processes may require
             administrator privileges.

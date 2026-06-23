@@ -49,3 +49,17 @@ export interface DownloadProgress {
   downloaded: number;
   total: number | null;
 }
+
+export type KillSource = "ui" | "tray" | "group" | "inspect";
+
+export interface LedgerEntry {
+  id: string;
+  timestamp: string;
+  pid: number;
+  port: number;
+  protocol: string;
+  processName: string;
+  success: boolean;
+  errorMessage: string | null;
+  source: KillSource;
+}

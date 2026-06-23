@@ -17,6 +17,7 @@ interface PortTableProps {
   protocolFilter: "ALL" | "TCP" | "UDP";
   isRefreshing: boolean;
   killingPid: number | null;
+  protectedProcessNames: string[];
   onRequestKill: (port: PortInfo) => void;
   onRequestKillGroup: (group: PortGroup) => void;
   onRequestInspect: (port: PortInfo) => void;
@@ -32,6 +33,7 @@ export function PortTable({
   protocolFilter,
   isRefreshing,
   killingPid,
+  protectedProcessNames,
   onRequestKill,
   onRequestKillGroup,
   onRequestInspect,
@@ -138,6 +140,7 @@ export function PortTable({
                     group={group}
                     isExpanded={expandedGroups.has(group.groupKey)}
                     killingPid={killingPid}
+                    protectedProcessNames={protectedProcessNames}
                     onToggleExpand={() => toggleGroupExpanded(group.groupKey)}
                     onRequestKill={onRequestKill}
                     onRequestKillGroup={onRequestKillGroup}
@@ -150,6 +153,7 @@ export function PortTable({
                     key={`${portInfo.port}-${portInfo.protocol}`}
                     portInfo={portInfo}
                     killingPid={killingPid}
+                    protectedProcessNames={protectedProcessNames}
                     onRequestKill={onRequestKill}
                     onRequestInspect={onRequestInspect}
                   />
