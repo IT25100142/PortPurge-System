@@ -20,8 +20,8 @@ export function ToastContainer({ toasts, onDismiss }: ToastContainerProps) {
             toast.type === "success"
               ? "bg-[#0b1c14]/90 border-green-800/50 text-green-300"
               : toast.type === "error"
-              ? "bg-[#250d0d]/90 border-red-800/50 text-red-300"
-              : "bg-[#1f150b]/90 border-[#855223]/50 text-amber-300"
+                ? "bg-[#250d0d]/90 border-red-800/50 text-red-300"
+                : "bg-[#1f150b]/90 border-[#855223]/50 text-amber-300"
           }`}
         >
           {toast.permissionDenied ? (
@@ -40,9 +40,7 @@ export function ToastContainer({ toasts, onDismiss }: ToastContainerProps) {
             <AlertCircle className="w-5 h-5 shrink-0 text-amber-500" />
           )}
 
-          <div className="flex-1 text-xs font-semibold leading-relaxed">
-            {toast.message}
-          </div>
+          <div className="flex-1 text-xs font-semibold leading-relaxed">{toast.message}</div>
 
           <button
             type="button"

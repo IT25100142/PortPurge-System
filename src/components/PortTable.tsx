@@ -23,11 +23,9 @@ export function PortTable({
   onRequestKill,
   onClearFilters,
 }: PortTableProps) {
-  const hasActiveFilters =
-    searchQuery.trim() !== "" || protocolFilter !== "ALL";
+  const hasActiveFilters = searchQuery.trim() !== "" || protocolFilter !== "ALL";
 
-  const emptyVariant =
-    totalPortCount === 0 ? "no-ports" : "no-results";
+  const emptyVariant = totalPortCount === 0 ? "no-ports" : "no-results";
 
   return (
     <main className="glass-panel overflow-hidden relative">
