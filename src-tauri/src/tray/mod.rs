@@ -1,3 +1,4 @@
+use crate::ledger::{self, KillContext, KillSource};
 use crate::sys::{self, PortInfo, PortPurgeError, Protocol};
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -30,7 +31,7 @@ struct TrayTracking {
 impl TrayTracking {
     fn new() -> Self {
         Self {
-            slots: [None; TOP_PORT_SLOTS],
+            slots: std::array::from_fn(|_| None),
             first_seen: HashMap::new(),
             icon_state: TrayIconState::Normal,
         }
@@ -45,10 +46,12 @@ pub struct TrayState {
 }
 
 /// A port entry bound to a tray menu kill slot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct PortSlot {
     pid: u32,
     port: u16,
+    process_name: String,
+    protocol: Protocol,
 }
 
 fn icon_state_for_port_count(count: usize) -> TrayIconState {
@@ -125,7 +128,7 @@ fn handle_tray_kill(app: &AppHandle, slot_index: usize) {
         return;
     }
 
-    let pid = {
+    let slot = {
         let state = app.state::<TrayState>();
         let tracking = match state.tracking.lock() {
             Ok(guard) => guard,
@@ -134,26 +137,45 @@ fn handle_tray_kill(app: &AppHandle, slot_index: usize) {
                 return;
             }
         };
-        tracking.slots[slot_index].map(|slot| slot.pid)
+        tracking.slots[slot_index].clone()
     };
 
-    let Some(pid) = pid else {
+    let Some(slot) = slot else {
         return;
     };
 
+    let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(err) = sys::kill_process_by_pid(pid).await {
+        let ctx = KillContext {
+            pid: slot.pid,
+            port: slot.port,
+            protocol: slot.protocol.to_string(),
+            process_name: slot.process_name,
+            source: KillSource::Tray,
+        };
+
+        if let Err(err) = ledger::kill_and_record(&app, ctx).await {
             match err {
                 PortPurgeError::AccessDenied => {
                     eprintln!(
-                        "Tray kill denied for PID {pid}: run PortPurge with admin/sudo privileges"
+                        "Tray kill denied for PID {}: run PortPurge with admin/sudo privileges",
+                        slot.pid
                     );
                 }
                 PortPurgeError::ProcessNotFound => {
-                    eprintln!("Tray kill skipped for PID {pid}: process already exited");
+                    eprintln!(
+                        "Tray kill skipped for PID {}: process already exited",
+                        slot.pid
+                    );
+                }
+                PortPurgeError::ProtectedProcess(name) => {
+                    eprintln!(
+                        "Tray kill blocked for PID {}: {name} is protected by Smart Protect",
+                        slot.pid
+                    );
                 }
                 other => {
-                    eprintln!("Tray kill failed for PID {pid}: {other}");
+                    eprintln!("Tray kill failed for PID {}: {other}", slot.pid);
                 }
             }
         }
@@ -177,11 +199,13 @@ async fn refresh_tray_ports(app: &AppHandle) -> Result<(), String> {
         update_first_seen(&mut tracking.first_seen, &ports, now);
         let top_ports = select_top_recent_ports(&ports, &tracking.first_seen, TOP_PORT_SLOTS);
 
-        tracking.slots = [None; TOP_PORT_SLOTS];
+        tracking.slots = std::array::from_fn(|_| None);
         for (index, port) in top_ports.iter().enumerate() {
             tracking.slots[index] = Some(PortSlot {
                 pid: port.pid,
                 port: port.port,
+                process_name: port.process_name.clone(),
+                protocol: port.protocol.clone(),
             });
         }
 
@@ -195,19 +219,18 @@ async fn refresh_tray_ports(app: &AppHandle) -> Result<(), String> {
 
     if icon_state_changed {
         let state = app.state::<TrayState>();
-        if let Err(err) = state
-            .tray
-            .set_icon(Some(icon_for_state(new_icon_state)))
-        {
+        if let Err(err) = state.tray.set_icon(Some(icon_for_state(new_icon_state))) {
             eprintln!("Tray icon update failed: {err}");
         }
     }
 
+    let config = app.state::<crate::config::ConfigState>();
     let state = app.state::<TrayState>();
     for index in 0..TOP_PORT_SLOTS {
         if let Some(port) = top_ports.get(index) {
             let _ = state.port_items[index].set_text(format_kill_label(port));
-            let _ = state.port_items[index].set_enabled(true);
+            let enabled = !config.is_protected(&port.process_name);
+            let _ = state.port_items[index].set_enabled(enabled);
         } else {
             let _ = state.port_items[index].set_text("—");
             let _ = state.port_items[index].set_enabled(false);
