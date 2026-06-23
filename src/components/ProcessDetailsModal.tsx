@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertTriangle, Loader2, Search, Skull, X } from "lucide-react";
+import { AlertTriangle, Loader2, Search, Shield, Skull, X } from "lucide-react";
 import type { PortInfo, ProcessDetails } from "../types";
+import { isProcessProtected, SMART_PROTECT_KILL_TITLE } from "../utils/isProcessProtected";
 
 interface ProcessDetailsModalProps {
   target: PortInfo | null;
+  protectedProcessNames: string[];
   onClose: () => void;
   onRequestKill: (port: PortInfo) => void;
 }
@@ -32,7 +34,12 @@ function DetailRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function ProcessDetailsModal({ target, onClose, onRequestKill }: ProcessDetailsModalProps) {
+export function ProcessDetailsModal({
+  target,
+  protectedProcessNames,
+  onClose,
+  onRequestKill,
+}: ProcessDetailsModalProps) {
   const [details, setDetails] = useState<ProcessDetails | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -102,6 +109,8 @@ export function ProcessDetailsModal({ target, onClose, onRequestKill }: ProcessD
     return null;
   }
 
+  const isProtected = isProcessProtected(target.processName, protectedProcessNames);
+
   const handleKill = () => {
     onRequestKill(target);
     onClose();
@@ -162,6 +171,13 @@ export function ProcessDetailsModal({ target, onClose, onRequestKill }: ProcessD
 
         {!isLoading && !error && details && (
           <>
+            {isProtected && (
+              <div className="flex items-start gap-2.5 p-3 rounded-xl bg-slate-900/60 border border-slate-700/60 text-slate-300">
+                <Shield className="w-4 h-4 shrink-0 text-slate-400 mt-0.5" />
+                <p className="text-xs leading-relaxed">{SMART_PROTECT_KILL_TITLE}</p>
+              </div>
+            )}
+
             {details.permissionsLimited && (
               <div className="flex items-start gap-2.5 p-3 rounded-xl bg-amber-950/20 border border-amber-800/30 text-amber-200/90">
                 <AlertTriangle className="w-4 h-4 shrink-0 text-amber-500 mt-0.5" />
@@ -210,10 +226,15 @@ export function ProcessDetailsModal({ target, onClose, onRequestKill }: ProcessD
             <button
               type="button"
               onClick={handleKill}
-              disabled={isLoading}
-              className="px-5 py-2.5 text-xs font-bold bg-red-600 hover:bg-red-500 disabled:opacity-60 text-white rounded-xl shadow-lg shadow-red-900/20 transition cursor-pointer flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/50"
+              disabled={isLoading || isProtected}
+              title={isProtected ? SMART_PROTECT_KILL_TITLE : undefined}
+              className={`px-5 py-2.5 text-xs font-bold text-white rounded-xl shadow-lg transition flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/50 disabled:opacity-60 ${
+                isProtected
+                  ? "bg-slate-700 cursor-not-allowed shadow-none"
+                  : "bg-red-600 hover:bg-red-500 shadow-red-900/20 cursor-pointer"
+              }`}
             >
-              <Skull className="w-3.5 h-3.5" />
+              {isProtected ? <Shield className="w-3.5 h-3.5" /> : <Skull className="w-3.5 h-3.5" />}
               Kill Process
             </button>
           )}

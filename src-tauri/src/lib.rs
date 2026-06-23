@@ -1,6 +1,10 @@
+mod config;
+mod ledger;
 mod sys;
 mod tray;
 
+use config::get_protected_process_names;
+use ledger::{clear_ledger_entries, get_ledger_entries, kill_and_record, KillContext, KillSource};
 use sys::{PortInfo, ProcessDetails};
 use tauri::Manager;
 
@@ -10,10 +14,26 @@ async fn get_active_ports() -> Result<Vec<PortInfo>, String> {
 }
 
 #[tauri::command]
-async fn kill_process_by_pid(pid: u32) -> Result<(), String> {
-    sys::kill_process_by_pid(pid)
-        .await
-        .map_err(|e| e.to_string())
+async fn kill_process_by_pid(
+    app: tauri::AppHandle,
+    pid: u32,
+    port: u16,
+    protocol: String,
+    process_name: String,
+    source: KillSource,
+) -> Result<(), String> {
+    kill_and_record(
+        &app,
+        KillContext {
+            pid,
+            port,
+            protocol,
+            process_name,
+            source,
+        },
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -35,7 +55,11 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .setup(|app| tray::init(app))
+        .setup(|app| {
+            ledger::init(app)?;
+            config::init(app)?;
+            tray::init(app)
+        })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let _ = window.hide();
@@ -45,7 +69,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_active_ports,
             kill_process_by_pid,
-            get_process_details
+            get_process_details,
+            get_ledger_entries,
+            clear_ledger_entries,
+            get_protected_process_names
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

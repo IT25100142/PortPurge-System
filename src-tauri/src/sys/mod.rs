@@ -89,6 +89,8 @@ pub enum PortPurgeError {
     CommandError(String),
     #[error("Unknown error: {0}")]
     Unknown(String),
+    #[error("Protected process \"{0}\" cannot be terminated (Smart Protect).")]
+    ProtectedProcess(String),
 }
 
 /// Deduplicate by `(port, protocol)`, preferring a known process name over `"Unknown"`, then sort by port.
@@ -218,6 +220,10 @@ mod tests {
         assert_eq!(
             PortPurgeError::Unknown("unexpected".into()).to_string(),
             "Unknown error: unexpected"
+        );
+        assert_eq!(
+            PortPurgeError::ProtectedProcess("explorer.exe".into()).to_string(),
+            "Protected process \"explorer.exe\" cannot be terminated (Smart Protect)."
         );
     }
 
