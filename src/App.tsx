@@ -1,25 +1,30 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { check, Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { RotateCw } from "lucide-react";
+import { History, RotateCw } from "lucide-react";
 import { PortTable } from "./components/PortTable";
 import { ToastContainer } from "./components/ToastContainer";
 import { UpdateModal } from "./components/UpdateModal";
 import { KillConfirmModal } from "./components/KillConfirmModal";
 import { KillGroupConfirmModal } from "./components/KillGroupConfirmModal";
 import { ProcessDetailsModal } from "./components/ProcessDetailsModal";
+import { LedgerDrawer } from "./components/LedgerDrawer";
 import { MetricsBar } from "./components/MetricsBar";
 import { SearchFilters } from "./components/SearchFilters";
-import type { PortGroup, PortInfo, Toast } from "./types";
+import type { KillSource, LedgerEntry, PortGroup, PortInfo, Toast } from "./types";
 import { filterPortsByFuzzyQuery } from "./utils/fuzzySearch";
 import { groupByProcessName } from "./utils/groupPorts";
+import { isProcessProtected } from "./utils/isProcessProtected";
 
 function formatLastRefreshed(date: Date | null): string {
   if (!date) return "—";
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
+
+const MAX_LEDGER_ENTRIES = 100;
 
 function App() {
   const [ports, setPorts] = useState<PortInfo[]>([]);
@@ -50,6 +55,10 @@ function App() {
   });
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [appVersion, setAppVersion] = useState<string | null>(null);
+
+  const [ledgerOpen, setLedgerOpen] = useState(false);
+  const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
+  const [protectedProcessNames, setProtectedProcessNames] = useState<string[]>([]);
 
   const toastTimeoutRefs = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
@@ -103,6 +112,36 @@ function App() {
   useEffect(() => {
     if (!isTauri()) return;
 
+    invoke<LedgerEntry[]>("get_ledger_entries")
+      .then(setLedgerEntries)
+      .catch(() => {});
+
+    invoke<string[]>("get_protected_process_names")
+      .then(setProtectedProcessNames)
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+
+    let unlisten: (() => void) | undefined;
+
+    const subscribe = async () => {
+      unlisten = await listen<LedgerEntry>("ledger-updated", (event) => {
+        setLedgerEntries((prev) => [event.payload, ...prev].slice(0, MAX_LEDGER_ENTRIES));
+      });
+    };
+
+    subscribe();
+
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+
     getVersion()
       .then((version) => setAppVersion(version))
       .catch(() => {});
@@ -143,7 +182,8 @@ function App() {
     return () => clearTimeout(timer);
   }, [showToast]);
 
-  const killProcess = async (pid: number, port: number) => {
+  const killProcess = async (target: PortInfo, source: KillSource = "ui") => {
+    const { pid, port } = target;
     setKillTarget(null);
     setKillingPid(pid);
 
@@ -151,7 +191,13 @@ function App() {
     setPorts((prev) => prev.filter((p) => p.pid !== pid));
 
     try {
-      await invoke("kill_process_by_pid", { pid });
+      await invoke("kill_process_by_pid", {
+        pid: target.pid,
+        port: target.port,
+        protocol: target.protocol,
+        processName: target.processName,
+        source,
+      });
       showToast(`Process ${pid} on Port ${port} terminated successfully.`, "success");
     } catch (err) {
       setPorts(previousPorts);
@@ -162,6 +208,11 @@ function App() {
           `Permission Denied: Run as administrator/sudo to terminate PID ${pid}.`,
           "error",
           { permissionDenied: true },
+        );
+      } else if (errMsg.includes("Smart Protect") || errMsg.includes("Protected process")) {
+        showToast(
+          `Smart Protect blocked termination of ${target.processName?.trim() || "Unknown"}.`,
+          "warning",
         );
       } else {
         showToast(`Failed to terminate PID ${pid}: ${errMsg}`, "error");
@@ -174,28 +225,49 @@ function App() {
 
   const killProcessGroup = async (group: PortGroup) => {
     setKillGroupTarget(null);
+
+    const processLabel = group.processName?.trim() || "Unknown";
+    const pids = [...group.uniquePids];
+    const killablePids = pids.filter((pid) => {
+      const portInfo = group.ports.find((p) => p.pid === pid) ?? group.ports[0];
+      return !isProcessProtected(portInfo.processName, protectedProcessNames);
+    });
+    const skippedCount = pids.length - killablePids.length;
+
+    if (killablePids.length === 0) {
+      showToast(`Smart Protect: all processes in ${processLabel} are protected.`, "warning");
+      return;
+    }
+
     setIsKillingGroup(true);
 
     const previousPorts = [...ports];
-    const pids = [...group.uniquePids];
-    const processLabel = group.processName?.trim() || "Unknown";
-
-    setPorts((prev) => prev.filter((port) => !pids.includes(port.pid)));
+    setPorts((prev) => prev.filter((port) => !killablePids.includes(port.pid)));
 
     let successCount = 0;
     const failures: string[] = [];
     let permissionDenied = false;
+    let smartProtectBlocked = false;
 
-    for (const pid of pids) {
+    for (const pid of killablePids) {
       setKillingPid(pid);
+      const portInfo = group.ports.find((p) => p.pid === pid) ?? group.ports[0];
       try {
-        await invoke("kill_process_by_pid", { pid });
+        await invoke("kill_process_by_pid", {
+          pid,
+          port: portInfo.port,
+          protocol: portInfo.protocol,
+          processName: portInfo.processName,
+          source: "group",
+        });
         successCount++;
       } catch (err) {
         const errMsg = String(err);
         failures.push(`PID ${pid}`);
         if (errMsg.includes("Access Denied")) {
           permissionDenied = true;
+        } else if (errMsg.includes("Smart Protect") || errMsg.includes("Protected process")) {
+          smartProtectBlocked = true;
         }
       }
     }
@@ -203,14 +275,18 @@ function App() {
     setKillingPid(null);
     setIsKillingGroup(false);
 
-    if (successCount === pids.length) {
+    const skipSuffix = skippedCount > 0 ? `; ${skippedCount} skipped by Smart Protect` : "";
+
+    if (successCount === killablePids.length) {
       showToast(
-        `Terminated ${successCount} process${successCount === 1 ? "" : "es"} (${processLabel}).`,
+        `Terminated ${successCount} process${successCount === 1 ? "" : "es"} (${processLabel})${skipSuffix}.`,
         "success",
       );
     } else if (successCount === 0) {
       setPorts(previousPorts);
-      if (permissionDenied) {
+      if (smartProtectBlocked) {
+        showToast(`Smart Protect blocked termination of processes in ${processLabel}.`, "warning");
+      } else if (permissionDenied) {
         showToast(
           `Permission Denied: Run as administrator/sudo to terminate processes in ${processLabel}.`,
           "error",
@@ -221,7 +297,7 @@ function App() {
       }
     } else {
       showToast(
-        `Terminated ${successCount} of ${pids.length} processes in ${processLabel}. Failed: ${failures.join(", ")}.`,
+        `Terminated ${successCount} of ${killablePids.length} processes in ${processLabel}. Failed: ${failures.join(", ")}${skipSuffix}.`,
         "warning",
       );
     }
@@ -350,6 +426,15 @@ function App() {
               </span>
               <button
                 type="button"
+                onClick={() => setLedgerOpen(true)}
+                className="flex items-center gap-2 px-4 py-2 text-sm font-semibold glass-control text-slate-200 hover:bg-slate-900/60 hover:text-white transition duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/50"
+                aria-label="Open purge history"
+              >
+                <History className="w-4 h-4 text-indigo-400" />
+                <span>History</span>
+              </button>
+              <button
+                type="button"
                 onClick={() => fetchPorts(true)}
                 disabled={isRefreshing}
                 className="flex items-center gap-2 px-4 py-2 text-sm font-semibold glass-control text-slate-200 hover:bg-slate-900/60 hover:text-white transition duration-200 disabled:opacity-50 group cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/50"
@@ -383,6 +468,7 @@ function App() {
           protocolFilter={protocolFilter}
           isRefreshing={isRefreshing}
           killingPid={killingPid}
+          protectedProcessNames={protectedProcessNames}
           onRequestKill={setKillTarget}
           onRequestKillGroup={setKillGroupTarget}
           onRequestInspect={setInspectTarget}
@@ -398,7 +484,7 @@ function App() {
         isKilling={killTarget !== null && killingPid === killTarget.pid}
         onConfirm={() => {
           if (killTarget) {
-            killProcess(killTarget.pid, killTarget.port);
+            killProcess(killTarget);
           }
         }}
         onCancel={() => setKillTarget(null)}
@@ -417,6 +503,7 @@ function App() {
 
       <ProcessDetailsModal
         target={inspectTarget}
+        protectedProcessNames={protectedProcessNames}
         onClose={closeInspectModal}
         onRequestKill={setKillTarget}
       />
@@ -434,6 +521,13 @@ function App() {
       )}
 
       <ToastContainer toasts={toasts} onDismiss={removeToast} />
+
+      <LedgerDrawer
+        isOpen={ledgerOpen}
+        onClose={() => setLedgerOpen(false)}
+        entries={ledgerEntries}
+        onCleared={() => setLedgerEntries([])}
+      />
     </div>
   );
 }
