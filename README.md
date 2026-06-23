@@ -1,53 +1,80 @@
 # PortPurge 💀
 
-PortPurge is a lightweight, polished, cross-platform desktop utility built with **Tauri v2**, **React**, **TypeScript**, and **Tailwind CSS v4**. It allows developers to monitor active network ports bound on localhost, view which processes are running on them, and purge (kill) them with a single click.
+PortPurge is a lightweight, polished, cross-platform **desktop utility** built with **Tauri v2**, **React**, **TypeScript**, and **Tailwind CSS v4**. It helps developers monitor TCP/UDP ports bound on localhost, see which processes own them, and purge (kill) those processes with a single click.
 
 ---
 
 ## Key Features
 
-*   **Real-time Port Monitoring**: Scans active TCP/UDP ports bound to localhost on a fast, 3-second polling interval.
-*   **High Performance**: Designed to avoid CPU spikes during fast polling by mapping running processes in $O(N)$ once per cycle instead of querying per port.
-*   **Snappy UX (Optimistic Updates)**: Instantly hides terminated ports from the list, with automatic rollback and toast warning if permission constraints (e.g. Access Denied) prevent the process from closing.
-*   **System Tray Integration**: Quietly runs in the system tray with left-click toggles and context menu options ("Show PortPurge" and "Quit").
-*   **Minimize-to-Tray**: Intercepts close requested window events (`X` button) to hide the app in the system tray instead of fully terminating.
-*   **Single-Instance Lock**: Prevents running multiple duplicate instances concurrently. Launching a second instance automatically focuses and restores the already running window.
-*   **Clean Error Classification**: Gracefully maps OS shell error signals to user-friendly messages (such as warning to run as administrator under permission constraints).
+- **Real-time port monitoring** — Scans localhost-only TCP/UDP ports (`127.0.0.1`, `::1`, `localhost`) on a 3-second polling interval.
+- **High performance** — Maps running processes once per scan cycle instead of querying per port.
+- **Snappy UX (optimistic updates)** — Instantly hides terminated ports, with automatic rollback and toast warnings on permission errors.
+- **Search and filters** — Filter by port, PID, process name, or protocol (ALL / TCP / UDP).
+- **In-app updater** — Checks GitHub Releases on startup and installs updates with one click.
+- **System tray integration** — Left-click toggles the window; context menu: Show / Quit.
+- **Minimize-to-tray** — The close button hides to the tray instead of quitting.
+- **Single-instance lock** — A second launch focuses the existing window.
+- **Clean error classification** — Maps OS errors (e.g. Access Denied) to actionable messages.
 
 ---
 
 ## Tech Stack
 
-*   **Frontend**: React (Vite, TypeScript), Tailwind CSS v4, Lucide React (Icons).
-*   **Backend**: Rust (Tauri v2 Core, Platform Command Parsers).
-*   **Communication**: Tauri IPC invoking platform-specific Rust commands.
+| Layer | Technologies |
+|-------|----------------|
+| **Frontend** | React 19, Vite, TypeScript, Tailwind CSS v4 (`@theme` design tokens), Lucide React |
+| **Backend** | Rust (Tauri v2), platform parsers in `src-tauri/src/sys/` |
+| **Communication** | Tauri IPC (`get_active_ports`, `kill_process_by_pid`) |
+| **Quality (local)** | ESLint, Prettier, `cargo clippy`, `cargo fmt` via npm scripts |
 
 ---
 
 ## System Architecture
 
 ```
-                       ┌─────────────────────────┐
-                       │     React Frontend      │
-                       │     (App.tsx Dashboard) │
-                       └────────────┬────────────┘
-                                    │
-                         Tauri IPC  │  (get_active_ports / kill_process_by_pid)
-                                    ▼
-                       ┌─────────────────────────┐
-                       │   Tauri Rust Backend    │
-                       │   (src-tauri/src/lib.rs)│
-                       └────────────┬────────────┘
-                                    │
-                       ┌────────────┴────────────┐
-                       ▼                         ▼
-         ┌──────────────────────────┐      ┌──────────────────────────┐
-         │     Windows Module       │      │       Unix Module        │
-         │   (sys/windows.rs)       │      │     (sys/unix.rs)        │
-         ├──────────────────────────┤      ├──────────────────────────┤
-         │ netstat -ano & tasklist  │      │ lsof -i -P -n & kill -9  │
-         └──────────────────────────┘      └──────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                   React Frontend                        │
+│  App.tsx (state, IPC, polling) + src/components/*       │
+│  types.ts · index.css (@theme / glass utilities)        │
+└───────────────────────────┬─────────────────────────────┘
+                            │  Tauri IPC
+                            │  get_active_ports
+                            │  kill_process_by_pid
+                            ▼
+┌─────────────────────────────────────────────────────────┐
+│              Tauri Rust Backend (lib.rs)                │
+│         IPC commands · tray · plugins · lifecycle       │
+└───────────────────────────┬─────────────────────────────┘
+                            │
+              ┌─────────────┴─────────────┐
+              ▼                           ▼
+┌──────────────────────────┐   ┌──────────────────────────┐
+│   Windows (windows.rs)   │   │     Unix (unix.rs)       │
+│   netstat · tasklist     │   │     lsof · kill -9       │
+│   taskkill               │   │                          │
+│   spawn_blocking I/O     │   │   spawn_blocking I/O     │
+└──────────────────────────┘   └──────────────────────────┘
 ```
+
+Blocking OS shell commands run inside `tauri::async_runtime::spawn_blocking` so the webview stays responsive during scans and kills.
+
+### Frontend layout
+
+| Path | Role |
+|------|------|
+| `src/App.tsx` | Orchestration: state, IPC, polling, kill flow, updater |
+| `src/components/` | UI: `PortTable`, `SearchFilters`, `MetricsBar`, modals, toasts, empty states |
+| `src/types.ts` | Shared TypeScript interfaces (`PortInfo`, `Toast`, etc.) |
+| `src/index.css` | Tailwind v4 `@theme` tokens and `glass-panel` utilities |
+
+### Backend layout
+
+| Path | Role |
+|------|------|
+| `src-tauri/src/lib.rs` | Tauri builder, IPC registration, tray, plugins |
+| `src-tauri/src/sys/mod.rs` | Shared types, localhost filter, dedupe helpers |
+| `src-tauri/src/sys/windows.rs` | `netstat` / `tasklist` / `taskkill` |
+| `src-tauri/src/sys/unix.rs` | `lsof` / `kill` |
 
 ---
 
@@ -55,24 +82,22 @@ PortPurge is a lightweight, polished, cross-platform desktop utility built with 
 
 ### Prerequisites
 
-Ensure you have Node.js and Rust installed on your machine.
-*   **Node.js**: `v24` or later is recommended.
-*   **Rust (Cargo)**: `v1.84` or later is recommended.
+- **Node.js** v24+ recommended
+- **Rust (Cargo)** v1.84+ recommended
+- **Platform tools (runtime):**
+  - Windows: `netstat`, `tasklist`, `taskkill` (built-in)
+  - macOS / Linux: `lsof` (standard on most systems)
 
 ### Installation
 
-1.  Clone or navigate to the project directory:
-    ```bash
-    cd PortPurge-System
-    ```
-2.  Install frontend dependencies:
-    ```bash
-    npm install
-    ```
+```bash
+cd PortPurge-System
+npm install
+```
 
-### Local Development Configuration
+### Local development configuration
 
-For remote or mobile Tauri development, you can bind the Vite dev server to a specific host. Copy `.env.example` to `.env` and set `TAURI_DEV_HOST` if needed:
+For remote or mobile Tauri development, copy `.env.example` to `.env` and set `TAURI_DEV_HOST` if needed:
 
 ```bash
 # .env.example
@@ -83,37 +108,52 @@ For remote or mobile Tauri development, you can bind the Vite dev server to a sp
 
 ## Commands Reference
 
-### Development Mode
-Launch the application locally in development mode:
+### Development
+
 ```bash
 npm run tauri dev
 ```
 
-### Run Backend Tests
+Runs the Vite dev server (port `1420`) and opens the Tauri window.
 
-Run the Rust backend test suite. This includes live OS integration tests (`get_active_ports` against the real system) and parser fixture tests for `netstat` / `lsof` output (localhost filtering, malformed lines, etc.):
+### Build
+
+```bash
+npm run build          # TypeScript check + Vite production build
+npm run tauri build    # Desktop installer → src-tauri/target/release/bundle/
+```
+
+### Test
 
 ```bash
 cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture
 ```
 
-### Frontend Build
-Compile the client application and Tailwind CSS styles for production checks:
-```bash
-npm run build
-```
+Includes parser fixture tests (`netstat` / `lsof` output, localhost filtering, malformed lines) and a live OS integration test. **18 tests on Windows; 25 on Unix/macOS/Linux** (Unix-only parser tests are platform-gated).
 
-### Package Production Bundle
-Build and pack the production-ready installation binary for your OS:
+### Lint and format
+
 ```bash
-npm run tauri build
+npm run lint           # ESLint (frontend) + cargo clippy (backend)
+npm run lint:frontend  # ESLint only
+npm run lint:backend   # cargo clippy only
+npm run format         # Prettier (frontend) + cargo fmt (backend)
 ```
-*(The compiled installer will be saved under `src-tauri/target/release/bundle/`)*
 
 ---
 
 ## Administrative Access
 
-Because PortPurge queries network sockets and kills running processes, some processes (e.g., system services) require administrative/sudo rights.
-*   **Windows**: Run PortPurge as Administrator to terminate processes owned by other services or users.
-*   **macOS / Linux**: Start PortPurge with elevated rights (`sudo`) if you need to purge ports bound by root-level processes.
+PortPurge queries network sockets and can terminate processes. Some system-owned processes require elevated privileges:
+
+- **Windows** — Run as Administrator to kill processes owned by other users or services.
+- **macOS / Linux** — Use `sudo` when purging ports bound by root-level processes.
+
+---
+
+## Project docs
+
+Contributor and AI assistant documentation lives in `ai/`:
+
+- `ai/PROJECT_CONTEXT.md` — architecture, IPC contracts, setup, known issues
+- `ai/AI_RULES.md` — coding constraints for agents and contributors
