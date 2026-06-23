@@ -5,6 +5,7 @@ import type { DownloadProgress } from "../types";
 
 interface UpdateModalProps {
   update: Update;
+  currentVersion: string | null;
   show: boolean;
   isDownloading: boolean;
   downloadProgress: DownloadProgress;
@@ -14,6 +15,7 @@ interface UpdateModalProps {
 
 export function UpdateModal({
   update,
+  currentVersion,
   show,
   isDownloading,
   downloadProgress,
@@ -67,7 +69,9 @@ export function UpdateModal({
         <div className="flex items-center justify-between p-3 glass-control font-mono text-xs">
           <div className="space-y-0.5">
             <span className="text-slate-500 block font-sans font-semibold">Current Version</span>
-            <span className="text-slate-300 font-bold">v0.1.0</span>
+            <span className="text-slate-300 font-bold">
+              {currentVersion ? `v${currentVersion}` : "v…"}
+            </span>
           </div>
           <div className="h-6 w-px bg-slate-800" />
           <div className="space-y-0.5 text-right">
