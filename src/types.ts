@@ -5,6 +5,17 @@ export interface PortInfo {
   processName: string;
 }
 
+export interface ProcessDetails {
+  pid: number;
+  processName: string;
+  executablePath: string | null;
+  commandLine: string | null;
+  memoryBytes: number | null;
+  user: string | null;
+  startedAt: string | null;
+  permissionsLimited: boolean;
+}
+
 export interface Toast {
   id: string;
   message: string;
