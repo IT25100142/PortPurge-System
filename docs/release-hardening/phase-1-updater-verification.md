@@ -3,7 +3,22 @@
 **Status:** Four-case isolated signature verification **COMPLETE** (exact compromised-key replay not performed)  
 **Date:** 2026-07-26  
 **Host platform:** Windows  
-**Source commit:** `9120438ab66a425b048f267d416b5b81045f8482` (`release-hardening`)
+**Source commit:** `9120438ab66a425b048f267d416b5b81045f8482` (`release-hardening`)  
+**Active public-key ID:** **A666E53E49439825**
+
+## Phase 1 closure context (post-rewrite)
+
+| Item | Status |
+|---|---|
+| Project-controlled Phase 1 controls | **COMPLETE** |
+| Strict technical exit criterion | **FAIL** — solely due to accepted GitHub unreachable-object retention by known SHA |
+| Accepted-risk project verdict | **PASS** |
+| Default-branch integration | **Pending** |
+| Reachable live history (encrypted-private findings) | **0** classifications / **0** encoded markers |
+| GitHub Releases / distributed release assets | **None** |
+| Active development clone | `E:/PortPurge-System-clean` |
+
+Reachable live refs were rewritten and classify clean. GitHub may still retain unreachable historical objects accessible through known SHAs; the user accepted that residual risk and declined the Support purge. This document does **not** claim those objects were purged.
 
 ## Tooling versions
 
@@ -34,6 +49,7 @@
 | Signature file SHA-256 | `b372a519bcd7149d271377988f94640b099afb6d9963f064c43d88c6cf24f9d1` |
 | Build exit | 0 |
 | Installer executed | **No** |
+| Published as GitHub Release asset | **No** (no Releases / distributed assets existed) |
 
 ## Results
 
@@ -56,7 +72,7 @@ Modified artifact SHA-256 (V2): `af541c1bddf4e2ca287872c0974e349688fcb3b934df716
 | Historical `876A418ECFF7F0EB` | Different |
 | Historical `F447B63DBADDB9D0` | Different |
 
-**Exact-old-key limitation:** Prompt 8 private material was logically deleted; historical Git private blobs were **not** retrieved. V3 is the safe foreign-key equivalent demonstrating key-mismatch enforcement under the active pubkey. No exact compromised-key replay was performed.
+**Exact-old-key limitation:** Prompt 8 / retired private material was not recovered for replay. Historical Git private blobs were **not** retrieved. V3 is the safe disposable foreign-key equivalent demonstrating key-mismatch enforcement under the active pubkey. No exact compromised-key replay was performed.
 
 ## Secret-leak scan (counts only)
 
@@ -73,11 +89,14 @@ Modified artifact SHA-256 (V2): `af541c1bddf4e2ca287872c0974e349688fcb3b934df716
 | Workspace deleted after capture | **true** |
 | DPAPI vault intact | **true** |
 
-## Still open
+## Local remediation cross-reference
 
-- Historical Git exposure of pre-containment private material remains unresolved (scrubbing decision pending).
-- Exact compromised/retired private-key runtime replay was intentionally not performed.
+- Stale clone `E:/PortPurge-System` deleted (logical filesystem removal, not forensic erasure).
+- Contaminated local tag `pre-hardening-backup` intentionally discarded.
+- Contaminated bundles and rewrite workspaces deleted (bundle count **0**).
+- Continued work uses `E:/PortPurge-System-clean` only.
+- See [`phase-1-updater-containment.md`](./phase-1-updater-containment.md) for the full accepted-risk and reachable-history record.
 
 ## Related
 
-- Containment / restoration narrative: [`phase-1-updater-containment.md`](./phase-1-updater-containment.md)
+- Containment / restoration / residual-risk narrative: [`phase-1-updater-containment.md`](./phase-1-updater-containment.md)
