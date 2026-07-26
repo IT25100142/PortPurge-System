@@ -14,18 +14,18 @@ import { ProcessDetailsModal } from "./components/ProcessDetailsModal";
 import { LedgerDrawer } from "./components/LedgerDrawer";
 import { MetricsBar } from "./components/MetricsBar";
 import { SearchFilters } from "./components/SearchFilters";
-import type { KillSource, LedgerEntry, PortGroup, PortInfo } from "./types";
+import type { KillSource, PortGroup, PortInfo } from "./types";
 import { filterPortsByFuzzyQuery } from "./utils/fuzzySearch";
 import { groupByProcessName } from "./utils/groupPorts";
 import { isProcessProtected } from "./utils/isProcessProtected";
 import { useToasts } from "./hooks/useToasts";
+import { usePurgeLedger } from "./hooks/usePurgeLedger";
+import { useSmartProtect } from "./hooks/useSmartProtect";
 
 function formatLastRefreshed(date: Date | null): string {
   if (!date) return "—";
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
-
-const MAX_LEDGER_ENTRIES = 100;
 
 function App() {
   const { toasts, showToast, removeToast } = useToasts();
@@ -58,9 +58,8 @@ function App() {
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [appVersion, setAppVersion] = useState<string | null>(null);
 
-  const [ledgerOpen, setLedgerOpen] = useState(false);
-  const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
-  const [protectedProcessNames, setProtectedProcessNames] = useState<string[]>([]);
+  const { ledgerOpen, setLedgerOpen, ledgerEntries, clearLedger } = usePurgeLedger();
+  const { protectedProcessNames } = useSmartProtect();
 
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -86,36 +85,6 @@ function App() {
   useEffect(() => {
     fetchPorts();
   }, [fetchPorts]);
-
-  useEffect(() => {
-    if (!isTauri()) return;
-
-    invoke<LedgerEntry[]>("get_ledger_entries")
-      .then(setLedgerEntries)
-      .catch(() => {});
-
-    invoke<string[]>("get_protected_process_names")
-      .then(setProtectedProcessNames)
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    if (!isTauri()) return;
-
-    let unlisten: (() => void) | undefined;
-
-    const subscribe = async () => {
-      unlisten = await listen<LedgerEntry>("ledger-updated", (event) => {
-        setLedgerEntries((prev) => [event.payload, ...prev].slice(0, MAX_LEDGER_ENTRIES));
-      });
-    };
-
-    subscribe();
-
-    return () => {
-      unlisten?.();
-    };
-  }, []);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -526,7 +495,7 @@ function App() {
         isOpen={ledgerOpen}
         onClose={() => setLedgerOpen(false)}
         entries={ledgerEntries}
-        onCleared={() => setLedgerEntries([])}
+        onCleared={clearLedger}
       />
     </div>
   );
