@@ -11,14 +11,17 @@ export function useWindowSummonFocus(): RefObject<HTMLInputElement | null> {
 
     let unlisten: (() => void) | undefined;
     let isUnmounted = false;
+    const pendingFrameIds = new Set<number>();
 
     const subscribe = async () => {
       try {
         const unlistenFn = await listen("window-summoned", () => {
-          requestAnimationFrame(() => {
+          const frameId = requestAnimationFrame(() => {
+            pendingFrameIds.delete(frameId);
             searchInputRef.current?.focus();
             searchInputRef.current?.select();
           });
+          pendingFrameIds.add(frameId);
         });
 
         if (isUnmounted) {
@@ -36,6 +39,10 @@ export function useWindowSummonFocus(): RefObject<HTMLInputElement | null> {
     return () => {
       isUnmounted = true;
       unlisten?.();
+      for (const frameId of pendingFrameIds) {
+        cancelAnimationFrame(frameId);
+      }
+      pendingFrameIds.clear();
     };
   }, []);
 

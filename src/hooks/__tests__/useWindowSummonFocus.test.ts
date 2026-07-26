@@ -13,16 +13,68 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(),
 }));
 
+type FrameCallback = FrameRequestCallback;
+
+/** Queues RAF callbacks until the test flushes them — does not run synchronously. */
+function createDeferredFrameHarness() {
+  let nextId = 1;
+  const pending = new Map<number, FrameCallback>();
+  const cancelAnimationFrame = vi.fn((id: number) => {
+    pending.delete(id);
+  });
+  const requestAnimationFrame = vi.fn((cb: FrameCallback) => {
+    const id = nextId++;
+    pending.set(id, cb);
+    return id;
+  });
+
+  return {
+    requestAnimationFrame,
+    cancelAnimationFrame,
+    pendingIds: () => [...pending.keys()],
+    pendingCount: () => pending.size,
+    flushOne: (id: number) => {
+      const cb = pending.get(id);
+      if (!cb) return false;
+      pending.delete(id);
+      cb(0);
+      return true;
+    },
+    flushAll: () => {
+      const ids = [...pending.keys()];
+      for (const id of ids) {
+        const cb = pending.get(id);
+        if (!cb) continue;
+        pending.delete(id);
+        cb(0);
+      }
+      return ids;
+    },
+    tryFlushAll: () => {
+      const ids = [...pending.keys()];
+      for (const id of ids) {
+        const cb = pending.get(id);
+        if (!cb) continue;
+        pending.delete(id);
+        cb(0);
+      }
+      return ids.length;
+    },
+  };
+}
+
 describe("useWindowSummonFocus hook", () => {
+  let frames: ReturnType<typeof createDeferredFrameHarness>;
+
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((cb) => {
-      cb(0);
-      return 0;
-    });
+    frames = createDeferredFrameHarness();
+    vi.stubGlobal("requestAnimationFrame", frames.requestAnimationFrame);
+    vi.stubGlobal("cancelAnimationFrame", frames.cancelAnimationFrame);
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
@@ -57,7 +109,7 @@ describe("useWindowSummonFocus hook", () => {
     expect(listen).toHaveBeenCalledTimes(1);
   });
 
-  it("focuses then selects the current input when the event fires", async () => {
+  it("defers focus and select until the queued animation frame runs", async () => {
     vi.mocked(isTauri).mockReturnValue(true);
     let eventHandler: (() => void) | undefined;
     vi.mocked(listen).mockImplementation(async (_eventName, handler) => {
@@ -80,14 +132,24 @@ describe("useWindowSummonFocus hook", () => {
       eventHandler!();
     });
 
+    expect(frames.pendingCount()).toBe(1);
+    expect(focusSpy).not.toHaveBeenCalled();
+    expect(selectSpy).not.toHaveBeenCalled();
+
+    const [frameId] = frames.pendingIds();
+    act(() => {
+      frames.flushOne(frameId);
+    });
+
     expect(focusSpy).toHaveBeenCalledTimes(1);
     expect(selectSpy).toHaveBeenCalledTimes(1);
     expect(focusSpy.mock.invocationCallOrder[0]).toBeLessThan(
       selectSpy.mock.invocationCallOrder[0],
     );
+    expect(frames.pendingCount()).toBe(0);
   });
 
-  it("does nothing safely when the ref current is null", async () => {
+  it("does nothing safely when the ref current is null after the frame runs", async () => {
     vi.mocked(isTauri).mockReturnValue(true);
     let eventHandler: (() => void) | undefined;
     vi.mocked(listen).mockImplementation(async (_eventName, handler) => {
@@ -102,12 +164,174 @@ describe("useWindowSummonFocus hook", () => {
     });
     expect(result.current.current).toBeNull();
 
+    act(() => {
+      eventHandler!();
+    });
+    expect(frames.pendingCount()).toBe(1);
+
     expect(() => {
       act(() => {
-        eventHandler!();
+        frames.flushAll();
       });
     }).not.toThrow();
-    expect(globalThis.requestAnimationFrame).toHaveBeenCalled();
+  });
+
+  it("cancels a pending frame on unmount and never focuses afterward", async () => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    let eventHandler: (() => void) | undefined;
+    vi.mocked(listen).mockImplementation(async (_eventName, handler) => {
+      eventHandler = handler as () => void;
+      return () => {};
+    });
+
+    const { result, unmount } = renderHook(() => useWindowSummonFocus());
+
+    await waitFor(() => {
+      expect(eventHandler).toBeDefined();
+    });
+
+    const input = document.createElement("input");
+    const focusSpy = vi.spyOn(input, "focus");
+    const selectSpy = vi.spyOn(input, "select");
+    result.current.current = input;
+
+    act(() => {
+      eventHandler!();
+    });
+    expect(frames.pendingCount()).toBe(1);
+    const [pendingId] = frames.pendingIds();
+
+    unmount();
+
+    expect(frames.cancelAnimationFrame).toHaveBeenCalledTimes(1);
+    expect(frames.cancelAnimationFrame).toHaveBeenCalledWith(pendingId);
+    expect(frames.pendingCount()).toBe(0);
+
+    act(() => {
+      frames.tryFlushAll();
+    });
+    expect(focusSpy).not.toHaveBeenCalled();
+    expect(selectSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not cancel an already executed frame on unmount", async () => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    let eventHandler: (() => void) | undefined;
+    vi.mocked(listen).mockImplementation(async (_eventName, handler) => {
+      eventHandler = handler as () => void;
+      return () => {};
+    });
+
+    const { result, unmount } = renderHook(() => useWindowSummonFocus());
+
+    await waitFor(() => {
+      expect(eventHandler).toBeDefined();
+    });
+
+    const input = document.createElement("input");
+    result.current.current = input;
+
+    act(() => {
+      eventHandler!();
+    });
+    const [frameId] = frames.pendingIds();
+    act(() => {
+      frames.flushOne(frameId);
+    });
+    expect(frames.pendingCount()).toBe(0);
+
+    unmount();
+
+    expect(frames.cancelAnimationFrame).not.toHaveBeenCalled();
+  });
+
+  it("schedules one distinct frame per rapid event and runs focus-then-select pairs", async () => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    let eventHandler: (() => void) | undefined;
+    vi.mocked(listen).mockImplementation(async (_eventName, handler) => {
+      eventHandler = handler as () => void;
+      return () => {};
+    });
+
+    const { result } = renderHook(() => useWindowSummonFocus());
+
+    await waitFor(() => {
+      expect(eventHandler).toBeDefined();
+    });
+
+    const input = document.createElement("input");
+    const focusSpy = vi.spyOn(input, "focus");
+    const selectSpy = vi.spyOn(input, "select");
+    result.current.current = input;
+
+    act(() => {
+      eventHandler!();
+      eventHandler!();
+      eventHandler!();
+    });
+
+    expect(frames.requestAnimationFrame).toHaveBeenCalledTimes(3);
+    expect(frames.pendingCount()).toBe(3);
+    const pendingIds = frames.pendingIds();
+    expect(new Set(pendingIds).size).toBe(3);
+
+    act(() => {
+      frames.flushAll();
+    });
+
+    expect(focusSpy).toHaveBeenCalledTimes(3);
+    expect(selectSpy).toHaveBeenCalledTimes(3);
+    for (let i = 0; i < 3; i++) {
+      expect(focusSpy.mock.invocationCallOrder[i]).toBeLessThan(
+        selectSpy.mock.invocationCallOrder[i],
+      );
+    }
+  });
+
+  it("cancels only remaining pending frames after a partial rapid-event flush", async () => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    let eventHandler: (() => void) | undefined;
+    vi.mocked(listen).mockImplementation(async (_eventName, handler) => {
+      eventHandler = handler as () => void;
+      return () => {};
+    });
+
+    const { result, unmount } = renderHook(() => useWindowSummonFocus());
+
+    await waitFor(() => {
+      expect(eventHandler).toBeDefined();
+    });
+
+    const input = document.createElement("input");
+    const focusSpy = vi.spyOn(input, "focus");
+    const selectSpy = vi.spyOn(input, "select");
+    result.current.current = input;
+
+    act(() => {
+      eventHandler!();
+      eventHandler!();
+      eventHandler!();
+    });
+    const [firstId, secondId, thirdId] = frames.pendingIds();
+
+    act(() => {
+      frames.flushOne(firstId);
+    });
+    expect(focusSpy).toHaveBeenCalledTimes(1);
+    expect(selectSpy).toHaveBeenCalledTimes(1);
+
+    unmount();
+
+    expect(frames.cancelAnimationFrame).toHaveBeenCalledTimes(2);
+    expect(frames.cancelAnimationFrame).toHaveBeenCalledWith(secondId);
+    expect(frames.cancelAnimationFrame).toHaveBeenCalledWith(thirdId);
+    expect(frames.cancelAnimationFrame).not.toHaveBeenCalledWith(firstId);
+
+    act(() => {
+      frames.tryFlushAll();
+    });
+    expect(focusSpy).toHaveBeenCalledTimes(1);
+    expect(selectSpy).toHaveBeenCalledTimes(1);
   });
 
   it("calls the resolved unlisten exactly once on unmount", async () => {
@@ -146,6 +370,7 @@ describe("useWindowSummonFocus hook", () => {
     });
 
     expect(unlistenFn).toHaveBeenCalledTimes(1);
+    expect(frames.cancelAnimationFrame).not.toHaveBeenCalled();
   });
 
   it("cleans each resolved registration exactly once across remount cycles", async () => {
@@ -190,5 +415,29 @@ describe("useWindowSummonFocus hook", () => {
     rerender();
 
     expect(listen).toHaveBeenCalledTimes(1);
+  });
+
+  it("swallows listen rejection without unhandled rejection or pending frames", async () => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    vi.mocked(listen).mockRejectedValue(new Error("listen failed"));
+
+    const onUnhandled = vi.fn();
+    window.addEventListener("unhandledrejection", onUnhandled);
+
+    const { unmount } = renderHook(() => useWindowSummonFocus());
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    window.removeEventListener("unhandledrejection", onUnhandled);
+
+    expect(onUnhandled).not.toHaveBeenCalled();
+    expect(frames.pendingCount()).toBe(0);
+    expect(frames.requestAnimationFrame).not.toHaveBeenCalled();
+
+    unmount();
+    expect(frames.cancelAnimationFrame).not.toHaveBeenCalled();
   });
 });
