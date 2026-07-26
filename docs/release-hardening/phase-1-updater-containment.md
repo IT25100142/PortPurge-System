@@ -1,6 +1,6 @@
 # Phase 1 — Updater signing containment and restoration
 
-**Status:** Rotation complete; updater wiring restored; signed-update verification pending  
+**Status:** Rotation complete; updater wiring restored; isolated signature verification complete (exact compromised-key replay not performed)  
 **Date:** 2026-07-26  
 **Branch:** `release-hardening`  
 
@@ -48,7 +48,7 @@ Resolved to the authoritative origin repository **Sankalpa-KMCP/PortPurge-System
 
 ## Still open
 
-- **Signed-update verification** (valid / modified / retired-key / missing-signature) has **not** been executed yet.
+- **Signed-update verification** — **completed** for the isolated four-case harness matrix; see [`phase-1-updater-verification.md`](./phase-1-updater-verification.md). Exact compromised-key replay was not performed (disclosed limitation).
 - **Historical Git exposure** of the pre-containment private material remains until a scrubbing decision is made.
 - Release workflow still references secret **names** only; do not embed values.
 
@@ -66,5 +66,5 @@ Resolved to the authoritative origin repository **Sankalpa-KMCP/PortPurge-System
 - [x] Updater + process plugins and capabilities restored  
 - [x] Frontend containment removed  
 - [x] Endpoint ownership aligned  
-- [ ] Signed artifact acceptance/rejection tests  
+- [x] Isolated four-case signature verification ([phase-1-updater-verification.md](./phase-1-updater-verification.md))  
 - [ ] Optional history scrubbing decision  
