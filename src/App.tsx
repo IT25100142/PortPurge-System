@@ -1,9 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { getVersion } from "@tauri-apps/api/app";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { check, Update } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
 import { History, RotateCw } from "lucide-react";
 import { PortTable } from "./components/PortTable";
 import { ToastContainer } from "./components/ToastContainer";
@@ -21,6 +18,7 @@ import { isProcessProtected } from "./utils/isProcessProtected";
 import { useToasts } from "./hooks/useToasts";
 import { usePurgeLedger } from "./hooks/usePurgeLedger";
 import { useSmartProtect } from "./hooks/useSmartProtect";
+import { useAppUpdater } from "./hooks/useAppUpdater";
 
 function formatLastRefreshed(date: Date | null): string {
   if (!date) return "—";
@@ -46,17 +44,15 @@ function App() {
 
   const closeInspectModal = useCallback(() => setInspectTarget(null), []);
 
-  const [updateAvailable, setUpdateAvailable] = useState<Update | null>(null);
-  const [isDownloading, setIsDownloading] = useState(false);
-  const [downloadProgress, setDownloadProgress] = useState<{
-    downloaded: number;
-    total: number | null;
-  }>({
-    downloaded: 0,
-    total: null,
-  });
-  const [showUpdateModal, setShowUpdateModal] = useState(false);
-  const [appVersion, setAppVersion] = useState<string | null>(null);
+  const {
+    appVersion,
+    updateAvailable,
+    showUpdateModal,
+    dismissUpdateModal,
+    isDownloading,
+    downloadProgress,
+    startUpdate,
+  } = useAppUpdater(showToast);
 
   const { ledgerOpen, setLedgerOpen, ledgerEntries, clearLedger } = usePurgeLedger();
   const { protectedProcessNames } = useSmartProtect();
@@ -108,14 +104,6 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!isTauri()) return;
-
-    getVersion()
-      .then((version) => setAppVersion(version))
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
     if (!autoRefresh) return;
     const timer = setInterval(() => {
       if (killingPid === null && !isKillingGroup) {
@@ -124,31 +112,6 @@ function App() {
     }, 3000);
     return () => clearInterval(timer);
   }, [autoRefresh, fetchPorts, killingPid, isKillingGroup]);
-
-  useEffect(() => {
-    if (!isTauri()) return;
-
-    const checkForUpdates = async () => {
-      try {
-        const update = await check();
-        if (update && update.available) {
-          setUpdateAvailable(update);
-          setShowUpdateModal(true);
-          showToast(`New update v${update.version} is available!`, "warning");
-        }
-      } catch (err) {
-        if (!import.meta.env.DEV) {
-          console.error("Failed to check for updates:", err);
-        }
-      }
-    };
-
-    const timer = setTimeout(() => {
-      checkForUpdates();
-    }, 1500);
-
-    return () => clearTimeout(timer);
-  }, [showToast]);
 
   const killProcess = async (target: PortInfo, source: KillSource = "ui") => {
     const { pid, port } = target;
@@ -271,47 +234,6 @@ function App() {
     }
 
     fetchPorts();
-  };
-
-  const startUpdate = async () => {
-    if (!updateAvailable) return;
-    setIsDownloading(true);
-    setDownloadProgress({ downloaded: 0, total: null });
-
-    try {
-      await updateAvailable.downloadAndInstall((event) => {
-        switch (event.event) {
-          case "Started":
-            setDownloadProgress({
-              downloaded: 0,
-              total: event.data.contentLength ?? null,
-            });
-            break;
-          case "Progress":
-            setDownloadProgress((prev) => ({
-              downloaded: prev.downloaded + event.data.chunkLength,
-              total: prev.total,
-            }));
-            break;
-          case "Finished":
-            break;
-        }
-      });
-
-      showToast("Update installed successfully. Restarting...", "success");
-
-      setTimeout(async () => {
-        try {
-          await relaunch();
-        } catch (err) {
-          showToast(`Failed to restart automatically: ${err}`, "error");
-          setIsDownloading(false);
-        }
-      }, 1500);
-    } catch (err) {
-      showToast(`Update failed: ${err}`, "error");
-      setIsDownloading(false);
-    }
   };
 
   const filteredPorts = useMemo(() => {
@@ -484,7 +406,7 @@ function App() {
           show={showUpdateModal}
           isDownloading={isDownloading}
           downloadProgress={downloadProgress}
-          onDismiss={() => setShowUpdateModal(false)}
+          onDismiss={dismissUpdateModal}
           onInstall={startUpdate}
         />
       )}
