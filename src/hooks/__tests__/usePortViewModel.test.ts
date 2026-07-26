@@ -22,6 +22,7 @@ describe("usePortViewModel hook", () => {
     expect(result.current.displayGroups).toBeNull();
     expect(result.current.tcpCount).toBe(2);
     expect(result.current.udpCount).toBe(2);
+    expect(result.current).not.toHaveProperty("setGroupByProcess");
   });
 
   it("filters ports using fuzzy search query", () => {
@@ -46,13 +47,30 @@ describe("usePortViewModel hook", () => {
     expect(result.current.filteredPorts.every((p) => p.protocol === "UDP")).toBe(true);
   });
 
+  it("applies fuzzy search before protocol filter and preserves source order", () => {
+    const { result } = renderHook(() => usePortViewModel(mockPorts));
+
+    act(() => {
+      // Fuzzy "exe" matches node.exe (8080 TCP, 5353 UDP) then python.exe (8081 UDP)
+      result.current.setSearchQuery("exe");
+      result.current.setProtocolFilter("UDP");
+    });
+
+    expect(result.current.filteredPorts).toEqual([
+      { pid: 300, port: 5353, protocol: "UDP", processName: "node.exe" },
+      { pid: 400, port: 8081, protocol: "UDP", processName: "python.exe" },
+    ]);
+    expect(result.current.filteredPorts.every((p) => p.protocol === "UDP")).toBe(true);
+  });
+
   it("groups filtered ports by process name when groupByProcess is true", () => {
     const { result } = renderHook(() => usePortViewModel(mockPorts));
 
     act(() => {
-      result.current.setGroupByProcess(true);
+      result.current.toggleGroupByProcess();
     });
 
+    expect(result.current.groupByProcess).toBe(true);
     expect(result.current.displayGroups).not.toBeNull();
     expect(result.current.displayGroups!).toHaveLength(3); // node.exe, vite, python.exe
 
@@ -81,16 +99,19 @@ describe("usePortViewModel hook", () => {
     expect(result.current.displayGroups).toBeNull();
   });
 
-  it("resets searchQuery and protocolFilter on clearFilters", () => {
+  it("resets searchQuery and protocolFilter on clearFilters while preserving grouping", () => {
     const { result } = renderHook(() => usePortViewModel(mockPorts));
 
     act(() => {
       result.current.setSearchQuery("node");
       result.current.setProtocolFilter("TCP");
+      result.current.toggleGroupByProcess();
     });
 
     expect(result.current.searchQuery).toBe("node");
     expect(result.current.protocolFilter).toBe("TCP");
+    expect(result.current.groupByProcess).toBe(true);
+    expect(result.current.displayGroups).not.toBeNull();
 
     act(() => {
       result.current.clearFilters();
@@ -98,6 +119,9 @@ describe("usePortViewModel hook", () => {
 
     expect(result.current.searchQuery).toBe("");
     expect(result.current.protocolFilter).toBe("ALL");
+    expect(result.current.groupByProcess).toBe(true);
+    expect(result.current.displayGroups).not.toBeNull();
+    expect(result.current.filteredPorts).toHaveLength(4);
   });
 
   it("recomputes filtered ports and metrics when ports prop changes", () => {

@@ -47,7 +47,6 @@ export function usePortViewModel(ports: PortInfo[]) {
     protocolFilter,
     setProtocolFilter,
     groupByProcess,
-    setGroupByProcess,
     toggleGroupByProcess,
     clearFilters,
     filteredPorts,
