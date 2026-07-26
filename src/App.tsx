@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { History, RotateCw } from "lucide-react";
@@ -12,13 +12,12 @@ import { LedgerDrawer } from "./components/LedgerDrawer";
 import { MetricsBar } from "./components/MetricsBar";
 import { SearchFilters } from "./components/SearchFilters";
 import type { KillSource, PortGroup, PortInfo } from "./types";
-import { filterPortsByFuzzyQuery } from "./utils/fuzzySearch";
-import { groupByProcessName } from "./utils/groupPorts";
 import { isProcessProtected } from "./utils/isProcessProtected";
 import { useToasts } from "./hooks/useToasts";
 import { usePurgeLedger } from "./hooks/usePurgeLedger";
 import { useSmartProtect } from "./hooks/useSmartProtect";
 import { useAppUpdater } from "./hooks/useAppUpdater";
+import { usePortViewModel } from "./hooks/usePortViewModel";
 
 function formatLastRefreshed(date: Date | null): string {
   if (!date) return "—";
@@ -29,9 +28,20 @@ function App() {
   const { toasts, showToast, removeToast } = useToasts();
 
   const [ports, setPorts] = useState<PortInfo[]>([]);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [protocolFilter, setProtocolFilter] = useState<"ALL" | "TCP" | "UDP">("ALL");
-  const [groupByProcess, setGroupByProcess] = useState(false);
+  const {
+    searchQuery,
+    setSearchQuery,
+    protocolFilter,
+    setProtocolFilter,
+    groupByProcess,
+    toggleGroupByProcess,
+    clearFilters,
+    filteredPorts,
+    displayGroups,
+    tcpCount,
+    udpCount,
+  } = usePortViewModel(ports);
+
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
@@ -236,23 +246,6 @@ function App() {
     fetchPorts();
   };
 
-  const filteredPorts = useMemo(() => {
-    const searchFiltered = filterPortsByFuzzyQuery(ports, searchQuery);
-    return searchFiltered.filter(
-      (port) => protocolFilter === "ALL" || port.protocol.toUpperCase() === protocolFilter,
-    );
-  }, [ports, searchQuery, protocolFilter]);
-
-  const displayGroups = useMemo((): PortGroup[] | null => {
-    if (!groupByProcess) {
-      return null;
-    }
-    return groupByProcessName(filteredPorts);
-  }, [filteredPorts, groupByProcess]);
-
-  const tcpCount = ports.filter((p) => p.protocol.toUpperCase() === "TCP").length;
-  const udpCount = ports.filter((p) => p.protocol.toUpperCase() === "UDP").length;
-
   return (
     <div className="min-h-screen bg-surface-base text-text-primary font-sans antialiased overflow-x-hidden p-6 select-none relative">
       <div className="ambient-orb top-[-20%] left-[-20%] w-[60%] h-[60%] bg-violet-600/6" />
@@ -347,7 +340,7 @@ function App() {
           inputRef={searchInputRef}
           onSearchChange={setSearchQuery}
           onProtocolChange={setProtocolFilter}
-          onToggleGroupByProcess={() => setGroupByProcess((prev) => !prev)}
+          onToggleGroupByProcess={toggleGroupByProcess}
         />
 
         <PortTable
@@ -363,10 +356,7 @@ function App() {
           onRequestKill={setKillTarget}
           onRequestKillGroup={setKillGroupTarget}
           onRequestInspect={setInspectTarget}
-          onClearFilters={() => {
-            setSearchQuery("");
-            setProtocolFilter("ALL");
-          }}
+          onClearFilters={clearFilters}
         />
       </div>
 
