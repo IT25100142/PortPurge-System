@@ -18,6 +18,7 @@ import { usePurgeLedger } from "./hooks/usePurgeLedger";
 import { useSmartProtect } from "./hooks/useSmartProtect";
 import { useAppUpdater } from "./hooks/useAppUpdater";
 import { usePortViewModel } from "./hooks/usePortViewModel";
+import { usePortScanner } from "./hooks/usePortScanner";
 
 function formatLastRefreshed(date: Date | null): string {
   if (!date) return "—";
@@ -27,7 +28,22 @@ function formatLastRefreshed(date: Date | null): string {
 function App() {
   const { toasts, showToast, removeToast } = useToasts();
 
-  const [ports, setPorts] = useState<PortInfo[]>([]);
+  const [killTarget, setKillTarget] = useState<PortInfo | null>(null);
+  const [killGroupTarget, setKillGroupTarget] = useState<PortGroup | null>(null);
+  const [inspectTarget, setInspectTarget] = useState<PortInfo | null>(null);
+  const [killingPid, setKillingPid] = useState<number | null>(null);
+  const [isKillingGroup, setIsKillingGroup] = useState(false);
+
+  const {
+    ports,
+    setPorts,
+    autoRefresh,
+    setAutoRefresh,
+    isRefreshing,
+    lastRefreshedAt,
+    fetchPorts,
+  } = usePortScanner(showToast, killingPid !== null || isKillingGroup);
+
   const {
     searchQuery,
     setSearchQuery,
@@ -41,16 +57,6 @@ function App() {
     tcpCount,
     udpCount,
   } = usePortViewModel(ports);
-
-  const [autoRefresh, setAutoRefresh] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
-
-  const [killTarget, setKillTarget] = useState<PortInfo | null>(null);
-  const [killGroupTarget, setKillGroupTarget] = useState<PortGroup | null>(null);
-  const [inspectTarget, setInspectTarget] = useState<PortInfo | null>(null);
-  const [killingPid, setKillingPid] = useState<number | null>(null);
-  const [isKillingGroup, setIsKillingGroup] = useState(false);
 
   const closeInspectModal = useCallback(() => setInspectTarget(null), []);
 
@@ -68,29 +74,6 @@ function App() {
   const { protectedProcessNames } = useSmartProtect();
 
   const searchInputRef = useRef<HTMLInputElement>(null);
-
-  const fetchPorts = useCallback(
-    async (showNotification = false) => {
-      setIsRefreshing(true);
-      try {
-        const activePorts = await invoke<PortInfo[]>("get_active_ports");
-        setPorts(activePorts);
-        setLastRefreshedAt(new Date());
-        if (showNotification) {
-          showToast(`Retrieved ${activePorts.length} active ports`, "success");
-        }
-      } catch (err) {
-        showToast(String(err), "error");
-      } finally {
-        setIsRefreshing(false);
-      }
-    },
-    [showToast],
-  );
-
-  useEffect(() => {
-    fetchPorts();
-  }, [fetchPorts]);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -112,16 +95,6 @@ function App() {
       unlisten?.();
     };
   }, []);
-
-  useEffect(() => {
-    if (!autoRefresh) return;
-    const timer = setInterval(() => {
-      if (killingPid === null && !isKillingGroup) {
-        fetchPorts();
-      }
-    }, 3000);
-    return () => clearInterval(timer);
-  }, [autoRefresh, fetchPorts, killingPid, isKillingGroup]);
 
   const killProcess = async (target: PortInfo, source: KillSource = "ui") => {
     const { pid, port } = target;
