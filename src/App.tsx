@@ -19,6 +19,7 @@ import { useAppUpdater } from "./hooks/useAppUpdater";
 import { usePortViewModel } from "./hooks/usePortViewModel";
 import { usePortScanner } from "./hooks/usePortScanner";
 import { useProcessTermination } from "./hooks/useProcessTermination";
+import { usePortPolling } from "./hooks/usePortPolling";
 
 function formatLastRefreshed(date: Date | null): string {
   if (!date) return "—";
@@ -31,7 +32,6 @@ function App() {
   const [killTarget, setKillTarget] = useState<PortInfo | null>(null);
   const [killGroupTarget, setKillGroupTarget] = useState<PortGroup | null>(null);
   const [inspectTarget, setInspectTarget] = useState<PortInfo | null>(null);
-  const [pollingPaused, setPollingPaused] = useState(false);
 
   const {
     ports,
@@ -41,7 +41,7 @@ function App() {
     isRefreshing,
     lastRefreshedAt,
     fetchPorts,
-  } = usePortScanner(showToast, pollingPaused);
+  } = usePortScanner(showToast);
 
   const { protectedProcessNames } = useSmartProtect();
 
@@ -53,10 +53,7 @@ function App() {
     protectedProcessNames,
   );
 
-  const nextPollingPaused = killingPid !== null || isKillingGroup;
-  if (pollingPaused !== nextPollingPaused) {
-    setPollingPaused(nextPollingPaused);
-  }
+  usePortPolling(fetchPorts, autoRefresh, killingPid !== null || isKillingGroup);
 
   const {
     searchQuery,

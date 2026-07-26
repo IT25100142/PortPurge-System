@@ -8,7 +8,7 @@ type ShowToast = (
   options?: { permissionDenied?: boolean },
 ) => void;
 
-export function usePortScanner(showToast: ShowToast, pollingPaused: boolean) {
+export function usePortScanner(showToast: ShowToast) {
   const [ports, setPorts] = useState<PortInfo[]>([]);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -36,16 +36,6 @@ export function usePortScanner(showToast: ShowToast, pollingPaused: boolean) {
   useEffect(() => {
     fetchPorts();
   }, [fetchPorts]);
-
-  useEffect(() => {
-    if (!autoRefresh) return;
-    const timer = setInterval(() => {
-      if (!pollingPaused) {
-        fetchPorts();
-      }
-    }, 3000);
-    return () => clearInterval(timer);
-  }, [autoRefresh, fetchPorts, pollingPaused]);
 
   return {
     ports,

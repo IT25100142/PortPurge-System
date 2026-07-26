@@ -30,7 +30,7 @@ describe("usePortScanner hook", () => {
   it("initializes with empty ports, autoRefresh enabled, and null timestamp before load settles", () => {
     vi.mocked(invoke).mockImplementation(() => new Promise(() => {}));
 
-    const { result } = renderHook(() => usePortScanner(showToastMock, false));
+    const { result } = renderHook(() => usePortScanner(showToastMock));
 
     expect(result.current.ports).toEqual([]);
     expect(result.current.autoRefresh).toBe(true);
@@ -40,7 +40,7 @@ describe("usePortScanner hook", () => {
   });
 
   it("invokes get_active_ports on mount and stores returned ports with a timestamp", async () => {
-    const { result } = renderHook(() => usePortScanner(showToastMock, false));
+    const { result } = renderHook(() => usePortScanner(showToastMock));
 
     await act(async () => {
       await Promise.resolve();
@@ -54,7 +54,7 @@ describe("usePortScanner hook", () => {
   });
 
   it("fetchPorts(true) shows the exact success notification", async () => {
-    const { result } = renderHook(() => usePortScanner(showToastMock, false));
+    const { result } = renderHook(() => usePortScanner(showToastMock));
 
     await act(async () => {
       await Promise.resolve();
@@ -71,27 +71,8 @@ describe("usePortScanner hook", () => {
     );
   });
 
-  it("polling refresh does not show the success notification", async () => {
-    const { result } = renderHook(() => usePortScanner(showToastMock, false));
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-    showToastMock.mockClear();
-    vi.mocked(invoke).mockClear();
-
-    await act(async () => {
-      vi.advanceTimersByTime(3000);
-      await Promise.resolve();
-    });
-
-    expect(invoke).toHaveBeenCalledWith("get_active_ports");
-    expect(showToastMock).not.toHaveBeenCalled();
-    expect(result.current.ports).toEqual(mockPorts);
-  });
-
   it("failed invoke shows the exact error notification and leaves previous ports and timestamp intact", async () => {
-    const { result } = renderHook(() => usePortScanner(showToastMock, false));
+    const { result } = renderHook(() => usePortScanner(showToastMock));
 
     await act(async () => {
       await Promise.resolve();
@@ -114,114 +95,8 @@ describe("usePortScanner hook", () => {
     expect(result.current.isRefreshing).toBe(false);
   });
 
-  it("autoRefresh=false prevents interval-triggered invokes", async () => {
-    const { result } = renderHook(() => usePortScanner(showToastMock, false));
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    act(() => {
-      result.current.setAutoRefresh(false);
-    });
-    vi.mocked(invoke).mockClear();
-
-    await act(async () => {
-      vi.advanceTimersByTime(9000);
-      await Promise.resolve();
-    });
-
-    expect(invoke).not.toHaveBeenCalled();
-  });
-
-  it("polls every 3000ms while autoRefresh is enabled", async () => {
-    renderHook(() => usePortScanner(showToastMock, false));
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-    vi.mocked(invoke).mockClear();
-
-    await act(async () => {
-      vi.advanceTimersByTime(2999);
-      await Promise.resolve();
-    });
-    expect(invoke).not.toHaveBeenCalled();
-
-    await act(async () => {
-      vi.advanceTimersByTime(1);
-      await Promise.resolve();
-    });
-    expect(invoke).toHaveBeenCalledTimes(1);
-
-    await act(async () => {
-      vi.advanceTimersByTime(3000);
-      await Promise.resolve();
-    });
-    expect(invoke).toHaveBeenCalledTimes(2);
-  });
-
-  it("pollingPaused skips polling invokes and resume restores polling without leaking intervals", async () => {
-    const { result, rerender } = renderHook(
-      ({ paused }: { paused: boolean }) => usePortScanner(showToastMock, paused),
-      { initialProps: { paused: true } },
-    );
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-    vi.mocked(invoke).mockClear();
-
-    await act(async () => {
-      vi.advanceTimersByTime(6000);
-      await Promise.resolve();
-    });
-    expect(invoke).not.toHaveBeenCalled();
-
-    rerender({ paused: false });
-    vi.mocked(invoke).mockClear();
-
-    await act(async () => {
-      vi.advanceTimersByTime(3000);
-      await Promise.resolve();
-    });
-    expect(invoke).toHaveBeenCalledTimes(1);
-    expect(result.current.autoRefresh).toBe(true);
-
-    // Pause again — interval remains but skips; then resume should not stack intervals
-    rerender({ paused: true });
-    vi.mocked(invoke).mockClear();
-    await act(async () => {
-      vi.advanceTimersByTime(3000);
-      await Promise.resolve();
-    });
-    expect(invoke).not.toHaveBeenCalled();
-
-    rerender({ paused: false });
-    vi.mocked(invoke).mockClear();
-    await act(async () => {
-      vi.advanceTimersByTime(3000);
-      await Promise.resolve();
-    });
-    expect(invoke).toHaveBeenCalledTimes(1);
-  });
-
-  it("clears the polling interval on unmount", async () => {
-    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
-    const { unmount } = renderHook(() => usePortScanner(showToastMock, false));
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    unmount();
-
-    expect(clearIntervalSpy).toHaveBeenCalled();
-    clearIntervalSpy.mockRestore();
-  });
-
   it("setPorts supports functional updates used by kill optimistic flows", async () => {
-    const { result } = renderHook(() => usePortScanner(showToastMock, false));
+    const { result } = renderHook(() => usePortScanner(showToastMock));
 
     await act(async () => {
       await Promise.resolve();
@@ -262,9 +137,8 @@ describe("usePortScanner hook", () => {
       )
       .mockResolvedValue(mockPorts);
 
-    const { result } = renderHook(() => usePortScanner(showToastMock, false));
+    const { result } = renderHook(() => usePortScanner(showToastMock));
 
-    // Wait for mount fetch to start (first pending promise)
     await act(async () => {
       await Promise.resolve();
     });
@@ -284,12 +158,11 @@ describe("usePortScanner hook", () => {
       resolveFirst(firstPorts);
       await Promise.resolve();
     });
-    // Stale first completion still writes — preserved parent behaviour
     expect(result.current.ports).toEqual(firstPorts);
   });
 
   it("clears isRefreshing in finally after both success and failure", async () => {
-    const { result } = renderHook(() => usePortScanner(showToastMock, false));
+    const { result } = renderHook(() => usePortScanner(showToastMock));
 
     await act(async () => {
       await Promise.resolve();
