@@ -4,7 +4,6 @@ import { isTauri } from "@tauri-apps/api/core";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import type { Toast } from "../types";
-import { UPDATER_ENABLED } from "./updaterContainment";
 
 export interface DownloadProgress {
   downloaded: number;
@@ -42,8 +41,7 @@ export function useAppUpdater(
   }, []);
 
   useEffect(() => {
-    // Fail-closed: no check/download/install while rotation is incomplete.
-    if (!UPDATER_ENABLED || !isTauri()) return;
+    if (!isTauri()) return;
 
     const checkForUpdates = async () => {
       try {
@@ -68,7 +66,7 @@ export function useAppUpdater(
   }, [showToast]);
 
   const startUpdate = useCallback(async () => {
-    if (!UPDATER_ENABLED || !updateAvailable) return;
+    if (!updateAvailable) return;
     setIsDownloading(true);
     setDownloadProgress({ downloaded: 0, total: null });
 
