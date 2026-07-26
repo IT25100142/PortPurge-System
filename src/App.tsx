@@ -14,10 +14,11 @@ import { ProcessDetailsModal } from "./components/ProcessDetailsModal";
 import { LedgerDrawer } from "./components/LedgerDrawer";
 import { MetricsBar } from "./components/MetricsBar";
 import { SearchFilters } from "./components/SearchFilters";
-import type { KillSource, LedgerEntry, PortGroup, PortInfo, Toast } from "./types";
+import type { KillSource, LedgerEntry, PortGroup, PortInfo } from "./types";
 import { filterPortsByFuzzyQuery } from "./utils/fuzzySearch";
 import { groupByProcessName } from "./utils/groupPorts";
 import { isProcessProtected } from "./utils/isProcessProtected";
+import { useToasts } from "./hooks/useToasts";
 
 function formatLastRefreshed(date: Date | null): string {
   if (!date) return "—";
@@ -27,6 +28,8 @@ function formatLastRefreshed(date: Date | null): string {
 const MAX_LEDGER_ENTRIES = 100;
 
 function App() {
+  const { toasts, showToast, removeToast } = useToasts();
+
   const [ports, setPorts] = useState<PortInfo[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [protocolFilter, setProtocolFilter] = useState<"ALL" | "TCP" | "UDP">("ALL");
@@ -34,7 +37,6 @@ function App() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
-  const [toasts, setToasts] = useState<Toast[]>([]);
 
   const [killTarget, setKillTarget] = useState<PortInfo | null>(null);
   const [killGroupTarget, setKillGroupTarget] = useState<PortGroup | null>(null);
@@ -60,32 +62,7 @@ function App() {
   const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
   const [protectedProcessNames, setProtectedProcessNames] = useState<string[]>([]);
 
-  const toastTimeoutRefs = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const searchInputRef = useRef<HTMLInputElement>(null);
-
-  const removeToast = useCallback((id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-    if (toastTimeoutRefs.current[id]) {
-      clearTimeout(toastTimeoutRefs.current[id]);
-      delete toastTimeoutRefs.current[id];
-    }
-  }, []);
-
-  const showToast = useCallback(
-    (message: string, type: Toast["type"], options?: { permissionDenied?: boolean }) => {
-      const id = Math.random().toString(36).substring(2, 9);
-      setToasts((prev) => [
-        ...prev,
-        { id, message, type, permissionDenied: options?.permissionDenied },
-      ]);
-
-      const timeout = setTimeout(() => {
-        removeToast(id);
-      }, 4000);
-      toastTimeoutRefs.current[id] = timeout;
-    },
-    [removeToast],
-  );
 
   const fetchPorts = useCallback(
     async (showNotification = false) => {
