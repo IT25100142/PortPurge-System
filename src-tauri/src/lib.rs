@@ -56,8 +56,11 @@ pub fn run() {
                 },
             );
         }))
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
+        // TEMPORARY CONTAINMENT (Phase 1): do not register the updater or process
+        // restart plugins until a valid updater *public* key is configured.
+        // See docs/release-hardening/phase-1-updater-containment.md
+        // .plugin(tauri_plugin_updater::Builder::new().build())
+        // .plugin(tauri_plugin_process::init())
         .setup(|app| {
             ledger::init(app)?;
             config::init(app)?;

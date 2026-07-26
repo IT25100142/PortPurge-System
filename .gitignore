@@ -22,13 +22,27 @@ dist-ssr
 *.sln
 *.sw?
 
-# Tauri signer keys
+# Environment files (keep tracked templates)
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Tauri / local signing private keys and scratch (do not ignore public keys broadly)
 updater.key
-updater.key.pub
+*.pem
+*.key
+*.p12
+*.pfx
+*.pkcs12
+secrets.json
+credentials.json
+*.secret
+gitleaks-report*.json
+.gitleaks-report*
 
 # Visual Studio environment files
 .vs/
 
 # AI context or local logs
 ai/
-

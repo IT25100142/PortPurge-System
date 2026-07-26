@@ -1,0 +1,23 @@
+# PortPurge Gitleaks configuration
+# Extends default rules and adds minisign/rsign private-key detection.
+# See docs/release-hardening/phase-1-updater-containment.md
+
+title = "PortPurge gitleaks"
+
+[extend]
+useDefault = true
+
+# Detect plaintext minisign/rsign encrypted private-key headers.
+[[rules]]
+id = "minisign-rsign-encrypted-secret-key-header"
+description = "Minisign/rsign encrypted private key header (never commit private updater keys)"
+regex = '''(?i)untrusted comment:\s*(?:minisign|rsign)\s+encrypted\s+secret\s+key'''
+keywords = ["encrypted secret key", "minisign", "rsign"]
+
+# Detect the common base64 encoding of those headers when embedded in JSON/text.
+# These prefixes are format markers (not secret values).
+[[rules]]
+id = "minisign-rsign-encrypted-secret-key-b64"
+description = "Base64-embedded minisign/rsign encrypted private key material"
+regex = '''dW50cnVzdGVkIGNvbW1lbnQ6I(?:HJzaWdu|G1pbmlzaWdu)IGVuY3J5cHRlZCBzZWNyZXQga2V5[A-Za-z0-9+/=]+'''
+keywords = ["dW50cnVzdGVkIGNvbW1lbnQ6"]
