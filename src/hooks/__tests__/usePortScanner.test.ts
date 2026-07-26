@@ -90,13 +90,15 @@ describe("usePortScanner hook", () => {
     expect(result.current.ports).toEqual(mockPorts);
   });
 
-  it("failed invoke shows the exact error notification and leaves previous ports intact", async () => {
+  it("failed invoke shows the exact error notification and leaves previous ports and timestamp intact", async () => {
     const { result } = renderHook(() => usePortScanner(showToastMock, false));
 
     await act(async () => {
       await Promise.resolve();
     });
     expect(result.current.ports).toEqual(mockPorts);
+    expect(result.current.lastRefreshedAt).toBeInstanceOf(Date);
+    const establishedTimestamp = result.current.lastRefreshedAt;
     showToastMock.mockClear();
 
     const failure = new Error("scan failed");
@@ -108,6 +110,7 @@ describe("usePortScanner hook", () => {
 
     expect(showToastMock).toHaveBeenCalledWith(String(failure), "error");
     expect(result.current.ports).toEqual(mockPorts);
+    expect(result.current.lastRefreshedAt).toBe(establishedTimestamp);
     expect(result.current.isRefreshing).toBe(false);
   });
 
