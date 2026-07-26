@@ -1,6 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import { isTauri } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { useState, useCallback } from "react";
 import { History, RotateCw } from "lucide-react";
 import { PortTable } from "./components/PortTable";
 import { ToastContainer } from "./components/ToastContainer";
@@ -20,6 +18,7 @@ import { usePortViewModel } from "./hooks/usePortViewModel";
 import { usePortScanner } from "./hooks/usePortScanner";
 import { useProcessTermination } from "./hooks/useProcessTermination";
 import { usePortPolling } from "./hooks/usePortPolling";
+import { useWindowSummonFocus } from "./hooks/useWindowSummonFocus";
 
 function formatLastRefreshed(date: Date | null): string {
   if (!date) return "—";
@@ -83,28 +82,7 @@ function App() {
 
   const { ledgerOpen, setLedgerOpen, ledgerEntries, clearLedger } = usePurgeLedger();
 
-  const searchInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (!isTauri()) return;
-
-    let unlisten: (() => void) | undefined;
-
-    const subscribe = async () => {
-      unlisten = await listen("window-summoned", () => {
-        requestAnimationFrame(() => {
-          searchInputRef.current?.focus();
-          searchInputRef.current?.select();
-        });
-      });
-    };
-
-    subscribe();
-
-    return () => {
-      unlisten?.();
-    };
-  }, []);
+  const searchInputRef = useWindowSummonFocus();
 
   return (
     <div className="min-h-screen bg-surface-base text-text-primary font-sans antialiased overflow-x-hidden p-6 select-none relative">
