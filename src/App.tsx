@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { History, RotateCw } from "lucide-react";
 import { PortTable } from "./components/PortTable";
@@ -11,14 +11,14 @@ import { ProcessDetailsModal } from "./components/ProcessDetailsModal";
 import { LedgerDrawer } from "./components/LedgerDrawer";
 import { MetricsBar } from "./components/MetricsBar";
 import { SearchFilters } from "./components/SearchFilters";
-import type { KillSource, PortGroup, PortInfo } from "./types";
-import { isProcessProtected } from "./utils/isProcessProtected";
+import type { PortGroup, PortInfo } from "./types";
 import { useToasts } from "./hooks/useToasts";
 import { usePurgeLedger } from "./hooks/usePurgeLedger";
 import { useSmartProtect } from "./hooks/useSmartProtect";
 import { useAppUpdater } from "./hooks/useAppUpdater";
 import { usePortViewModel } from "./hooks/usePortViewModel";
 import { usePortScanner } from "./hooks/usePortScanner";
+import { useProcessTermination } from "./hooks/useProcessTermination";
 
 function formatLastRefreshed(date: Date | null): string {
   if (!date) return "—";
@@ -31,8 +31,7 @@ function App() {
   const [killTarget, setKillTarget] = useState<PortInfo | null>(null);
   const [killGroupTarget, setKillGroupTarget] = useState<PortGroup | null>(null);
   const [inspectTarget, setInspectTarget] = useState<PortInfo | null>(null);
-  const [killingPid, setKillingPid] = useState<number | null>(null);
-  const [isKillingGroup, setIsKillingGroup] = useState(false);
+  const [pollingPaused, setPollingPaused] = useState(false);
 
   const {
     ports,
@@ -42,7 +41,22 @@ function App() {
     isRefreshing,
     lastRefreshedAt,
     fetchPorts,
-  } = usePortScanner(showToast, killingPid !== null || isKillingGroup);
+  } = usePortScanner(showToast, pollingPaused);
+
+  const { protectedProcessNames } = useSmartProtect();
+
+  const { killProcess, killProcessGroup, killingPid, isKillingGroup } = useProcessTermination(
+    ports,
+    setPorts,
+    fetchPorts,
+    showToast,
+    protectedProcessNames,
+  );
+
+  const nextPollingPaused = killingPid !== null || isKillingGroup;
+  if (pollingPaused !== nextPollingPaused) {
+    setPollingPaused(nextPollingPaused);
+  }
 
   const {
     searchQuery,
@@ -71,7 +85,6 @@ function App() {
   } = useAppUpdater(showToast);
 
   const { ledgerOpen, setLedgerOpen, ledgerEntries, clearLedger } = usePurgeLedger();
-  const { protectedProcessNames } = useSmartProtect();
 
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -95,129 +108,6 @@ function App() {
       unlisten?.();
     };
   }, []);
-
-  const killProcess = async (target: PortInfo, source: KillSource = "ui") => {
-    const { pid, port } = target;
-    setKillTarget(null);
-    setKillingPid(pid);
-
-    const previousPorts = [...ports];
-    setPorts((prev) => prev.filter((p) => p.pid !== pid));
-
-    try {
-      await invoke("kill_process_by_pid", {
-        pid: target.pid,
-        port: target.port,
-        protocol: target.protocol,
-        processName: target.processName,
-        source,
-      });
-      showToast(`Process ${pid} on Port ${port} terminated successfully.`, "success");
-    } catch (err) {
-      setPorts(previousPorts);
-
-      const errMsg = String(err);
-      if (errMsg.includes("Access Denied")) {
-        showToast(
-          `Permission Denied: Run as administrator/sudo to terminate PID ${pid}.`,
-          "error",
-          { permissionDenied: true },
-        );
-      } else if (errMsg.includes("Smart Protect") || errMsg.includes("Protected process")) {
-        showToast(
-          `Smart Protect blocked termination of ${target.processName?.trim() || "Unknown"}.`,
-          "warning",
-        );
-      } else {
-        showToast(`Failed to terminate PID ${pid}: ${errMsg}`, "error");
-      }
-    } finally {
-      setKillingPid(null);
-      fetchPorts();
-    }
-  };
-
-  const killProcessGroup = async (group: PortGroup) => {
-    setKillGroupTarget(null);
-
-    const processLabel = group.processName?.trim() || "Unknown";
-    const pids = [...group.uniquePids];
-    const killablePids = pids.filter((pid) => {
-      const portInfo = group.ports.find((p) => p.pid === pid) ?? group.ports[0];
-      return !isProcessProtected(portInfo.processName, protectedProcessNames);
-    });
-    const skippedCount = pids.length - killablePids.length;
-
-    if (killablePids.length === 0) {
-      showToast(`Smart Protect: all processes in ${processLabel} are protected.`, "warning");
-      return;
-    }
-
-    setIsKillingGroup(true);
-
-    const previousPorts = [...ports];
-    setPorts((prev) => prev.filter((port) => !killablePids.includes(port.pid)));
-
-    let successCount = 0;
-    const failures: string[] = [];
-    let permissionDenied = false;
-    let smartProtectBlocked = false;
-
-    for (const pid of killablePids) {
-      setKillingPid(pid);
-      const portInfo = group.ports.find((p) => p.pid === pid) ?? group.ports[0];
-      try {
-        await invoke("kill_process_by_pid", {
-          pid,
-          port: portInfo.port,
-          protocol: portInfo.protocol,
-          processName: portInfo.processName,
-          source: "group",
-        });
-        successCount++;
-      } catch (err) {
-        const errMsg = String(err);
-        failures.push(`PID ${pid}`);
-        if (errMsg.includes("Access Denied")) {
-          permissionDenied = true;
-        } else if (errMsg.includes("Smart Protect") || errMsg.includes("Protected process")) {
-          smartProtectBlocked = true;
-        }
-      }
-    }
-
-    setKillingPid(null);
-    setIsKillingGroup(false);
-
-    const skipSuffix = skippedCount > 0 ? `; ${skippedCount} skipped by Smart Protect` : "";
-
-    if (successCount === killablePids.length) {
-      showToast(
-        `Terminated ${successCount} process${successCount === 1 ? "" : "es"} (${processLabel})${skipSuffix}.`,
-        "success",
-      );
-    } else if (successCount === 0) {
-      setPorts(previousPorts);
-      if (smartProtectBlocked) {
-        showToast(`Smart Protect blocked termination of processes in ${processLabel}.`, "warning");
-      } else if (permissionDenied) {
-        showToast(
-          `Permission Denied: Run as administrator/sudo to terminate processes in ${processLabel}.`,
-          "error",
-          { permissionDenied: true },
-        );
-      } else {
-        showToast(`Failed to terminate processes in ${processLabel}.`, "error");
-      }
-    } else {
-      showToast(
-        `Terminated ${successCount} of ${killablePids.length} processes in ${processLabel}. Failed: ${failures.join(", ")}${skipSuffix}.`,
-        "warning",
-      );
-    }
-
-    fetchPorts();
-  };
 
   return (
     <div className="min-h-screen bg-surface-base text-text-primary font-sans antialiased overflow-x-hidden p-6 select-none relative">
@@ -338,7 +228,9 @@ function App() {
         isKilling={killTarget !== null && killingPid === killTarget.pid}
         onConfirm={() => {
           if (killTarget) {
-            killProcess(killTarget);
+            const target = killTarget;
+            setKillTarget(null);
+            void killProcess(target);
           }
         }}
         onCancel={() => setKillTarget(null)}
@@ -349,7 +241,9 @@ function App() {
         isKilling={isKillingGroup}
         onConfirm={() => {
           if (killGroupTarget) {
-            killProcessGroup(killGroupTarget);
+            const group = killGroupTarget;
+            setKillGroupTarget(null);
+            void killProcessGroup(group);
           }
         }}
         onCancel={() => setKillGroupTarget(null)}
