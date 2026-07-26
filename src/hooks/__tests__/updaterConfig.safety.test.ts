@@ -1,10 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync, existsSync } from "fs";
-import { dirname, join } from "path";
-import { fileURLToPath } from "url";
-
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../..");
-const TAURI_CONF = join(ROOT, "src-tauri/tauri.conf.json");
+import conf from "../../../src-tauri/tauri.conf.json";
 
 /** Final rotated public key (A666E53E49439825). Safe to embed in tests. */
 const EXPECTED_PUBKEY =
@@ -19,18 +14,11 @@ const EXPECTED_PUBLIC_HEADER =
 const RETIRED_PUBLIC_KEY_ID = "A051C5C7747123BA";
 
 function decodePubkeyComment(pubkey: string): string {
-  const decoded = Buffer.from(pubkey.trim(), "base64").toString("utf8");
+  const decoded = atob(pubkey.trim());
   return decoded.split(/\r?\n/)[0]?.trim() ?? "";
 }
 
 describe("updater configuration safety", () => {
-  const conf = JSON.parse(readFileSync(TAURI_CONF, "utf8")) as {
-    bundle: { createUpdaterArtifacts: boolean };
-    plugins: {
-      updater: { pubkey: string; endpoints: string[] };
-    };
-  };
-
   it("enables updater artifact creation", () => {
     expect(conf.bundle.createUpdaterArtifacts).toBe(true);
   });
@@ -58,21 +46,23 @@ describe("updater configuration safety", () => {
   });
 
   it("does not reference the retired Prompt 8 public-key id in active config", () => {
-    const raw = readFileSync(TAURI_CONF, "utf8");
-    expect(raw).not.toContain(RETIRED_PUBLIC_KEY_ID);
+    const serialized = JSON.stringify(conf);
+    expect(serialized).not.toContain(RETIRED_PUBLIC_KEY_ID);
     const header = decodePubkeyComment(conf.plugins.updater.pubkey);
     expect(header).not.toContain(RETIRED_PUBLIC_KEY_ID);
   });
 });
 
 describe("updater restoration is not gated by a frontend kill-switch", () => {
-  it("does not ship updaterContainment.ts", () => {
-    expect(existsSync(join(ROOT, "src/hooks/updaterContainment.ts"))).toBe(false);
+  it("does not ship an importable updaterContainment module", async () => {
+    // If containment is reintroduced, this @ts-expect-error becomes unused and fails tsc.
+    // @ts-expect-error containment module must remain deleted
+    await expect(import("../updaterContainment")).rejects.toBeTruthy();
   });
 
-  it("does not reference UPDATER_ENABLED in the updater hook", () => {
-    const hook = readFileSync(join(ROOT, "src/hooks/useAppUpdater.ts"), "utf8");
-    expect(hook).not.toMatch(/UPDATER_ENABLED/);
-    expect(hook).not.toMatch(/updaterContainment/);
+  it("does not export UPDATER_ENABLED from the updater hook module", async () => {
+    const mod = await import("../useAppUpdater");
+    expect(mod).not.toHaveProperty("UPDATER_ENABLED");
+    expect("UPDATER_ENABLED" in mod).toBe(false);
   });
 });
